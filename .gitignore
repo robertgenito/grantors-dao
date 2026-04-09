@@ -1,0 +1,21 @@
+# if you have any .DS_Store files, just remove them with this command:
+#$ find . -name ".DS_Store" -delete
+.DS_Store
+node_modules
+.env
+coverage
+coverage.json
+package-lock.json
+typechain
+
+#Hardhat files
+cache
+artifacts
+wallet.json
+old-wallet.json
+
+package-lock.json
+
+*.swp
+*.swo
+scripts/future-dash.js
