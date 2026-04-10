@@ -154,6 +154,10 @@ contract Constitution {
      *
      **************************************************************************/
 
+// Frankly, I'd just call this a "grantor" -- a "seat" implies that someone else can sit in it.
+// This first version will be super simple.  It's important to get terminology as accurate as possible!
+// OR, maybe these "seats" are whitelistSeats?  (accounts that can always have a seat, i.e. they're
+// whitelisted..)
     address[GRANTOR_SEAT_COUNT] internal _seats;
     mapping(address => uint8) internal _seatIndexPlusOne;
 
@@ -228,8 +232,12 @@ contract Constitution {
         onlySeat
         returns (uint8 count)
     {
+// let's get terminology down: have the "grantor" be the person (the account)
+// and "DAO Contract" to refer to the mechanics of the governance.
+// I'm implying that a better name for "newGrantor" is "newDaoContract".
         if (newGrantor == address(0)) revert ENullAddress();
 
+// isn't it still better on gas that everything in memory is uint256 ?
         uint8 seat = _seatIndexPlusOne[msg.sender];
         unchecked { seat -= 1; }
         uint16 bit = uint16(1 << seat);
