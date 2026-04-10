@@ -16,6 +16,9 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./interfaces/genius/v2/IGeniusGrantorRegistry.sol";
+
+// Hehe yea, core won't be available :)
+
 // import "../Core.sol";
 
 /*******************************************************************************
@@ -52,6 +55,10 @@ interface IConstitutionSeats {
     function seatIndex(address account) external view returns (uint8 indexPlusOne);
 }
 
+// In most cases, I found it better to leave constants at their default size of `uint256`
+// because then it's easier for the engineer to read visually.  When the size constraints
+// actually become important, then you see it directly in the code when you're reading
+// the code and implementing the code.
 uint8 constant GRANTOR_SEAT_COUNT = 16;
 uint40 constant GRANTOR_PROPOSAL_LIFETIME = 29 days;
 uint8 constant GRANTOR_MAX_ACTIONS = 8;
@@ -152,6 +159,9 @@ contract Grantors is ReentrancyGuard {
      *
      **************************************************************************/
 
+// Let's be clear that the constitution is actually the code that never changes.
+// It's not that the seats are unchangeable; it's that the interface between the
+// grantors of the world and genius's code is immutable.
     IConstitutionSeats internal immutable _constitution;
     address internal immutable _devOverride;
 
@@ -167,6 +177,8 @@ contract Grantors is ReentrancyGuard {
         uint256 indexed proposalId,
         address indexed proposer,
         uint40 eta,
+// Does a UI really need this information?  Doesn't the UI get the timestamps from
+// the log itself?
         uint40 txExpiresOn,
         uint40 expiresOn,
         uint8 actionCount,
@@ -180,6 +192,7 @@ contract Grantors is ReentrancyGuard {
         uint256 indexed proposalId,
         uint8 indexed actionIndex,
         address indexed target,
+// what's the selector again? ;x
         bytes4 selector,
         uint96 value
     );
@@ -188,12 +201,17 @@ contract Grantors is ReentrancyGuard {
     event EmergencyDisbursed(address indexed token, address indexed to, uint256 amount);
     event EmergencySignaled(address indexed seat, address indexed newGrantor, uint8 count);
     event DevOverrideRequested(address indexed requester, address indexed newGrantor, uint8 count);
+
+// what's the "geniusRegistry"?
     event EmergencyUpgradeExecuted(
         address indexed requester,
         address indexed geniusRegistry,
         address indexed newGrantor,
         uint8 count
     );
+
+// Let's call this "Accepted", like "GrantorWhitelistAccepted", implying that
+// the grantor's wallet account has accepted their whitelist invitation.
     event SeatRegistered(address indexed seat);
 
     /***************************************************************************
@@ -209,7 +227,12 @@ contract Grantors is ReentrancyGuard {
         address proposer;     // 20
         uint40 createdOn;     // 5
         uint40 eta;           // 5
+// ^-- this is already slot 1, with 16 bits remaining.
+
+// if we know when it's created, do we need to save when it expires?
         uint40 txExpiresOn;   // 5
+
+// just pack these into a single uint8
         uint8 actionCount;    // 1
         uint8 executed;       // 1 (1=false,2=true)
         uint8 proposalType;   // 1 (1=native,2=grantor)
@@ -217,7 +240,10 @@ contract Grantors is ReentrancyGuard {
         // Slot 2
         uint40 expiresOn;     // 5
         uint16 approvals;     // 2
+// I appreciate this approach, but let's keep it an actual tally count.
         uint16 yesBitmap;     // 2 (seat bits 0..15)
+
+// Slot 3 :)
         bytes32 url;          // 32 (occupies its own slot; kept separate for UI)
     }
 
@@ -237,6 +263,7 @@ contract Grantors is ReentrancyGuard {
      *
      **************************************************************************/
 
+// why not just make the variable public from the start?  my memory may be rusty
     function fee() public view returns (uint96 fee_) {
         unchecked {
             fee_ = uint96(_feePlusOne - 1);
@@ -254,12 +281,21 @@ contract Grantors is ReentrancyGuard {
     // proposalId starts at 1; 0 is prohibited
     uint256 internal _proposalCount;
 
+// Why not make it public?  that way, the UI can freely grab proposals without
+// the cost of implementing access or functions.
     // proposalId => core (url stored in separate slot for UI friendliness)
     mapping(uint256 => ProposalCore) internal _proposals;
 
     // proposalId => actionIndex => actionHash
+// Keep it as uint256 instead of uint8 here.  Here's why: it gets keccek'd as 256 anyways.
+// Setting it explicitly to uint8 causes more gas operations.
     mapping(uint256 => mapping(uint8 => bytes32)) internal _actionHash;
 
+// I say better to enforce this with logic because of the EVM's unique gas costs
+// for zero and non-zero, as well as engineers not having variable names that have
+// them do math.  I also don't see why the fee would ever become zero, but who knows,
+// maybe it's voted on because gas fees become perpetually insane for 6 months?
+// (a circumstance where the native gas fee is considered enough to prevent spam)
     // fee is stored as fee+1 so it can never become 0
     uint96 internal _feePlusOne;
 
@@ -295,6 +331,7 @@ contract Grantors is ReentrancyGuard {
      *
      **************************************************************************/
 
+// For clarity and less ambiguity, let's rename this.
     modifier onlySeat() {
         if (_seatIndexPlusOne(msg.sender) == 0) {
             revert EBadSeat();
@@ -324,6 +361,8 @@ contract Grantors is ReentrancyGuard {
      *
      *
      **************************************************************************/
+
+
 
     /***************************************************************************
      *
@@ -376,6 +415,104 @@ contract Grantors is ReentrancyGuard {
 
     function proposalTypeGrantor() external pure returns (uint8 t) {
         t = PROPOSAL_TYPE_GRANTOR;
+    }
+
+
+    /***************************************************************************
+     *
+     *
+     * PUBLIC ACCESS FUNCTIONALITY for the user and this contract
+     *
+     *
+     **************************************************************************/
+
+    /***************************************************************************
+     *
+     *
+     * INTERNAL FUNCTIONALITY
+     *
+     *
+     **************************************************************************/
+
+    function _seatIndexPlusOne(address account) internal view returns (uint8 i) {
+        i = _constitution.seatIndex(account);
+        if (i > GRANTOR_SEAT_COUNT) {
+            // Defensive: treat invalid registry results as non-seat.
+            i = 0;
+        }
+    }
+
+    function hashAction(address target, uint96 value, bytes calldata data)
+        external
+        pure
+        returns (bytes32 h)
+    {
+        h = _hashAction(target, value, data);
+    }
+
+    function _hashAction(address target, uint96 value, bytes calldata data)
+        internal
+        pure
+        returns (bytes32 h)
+    {
+        h = keccak256(abi.encode(target, value, keccak256(data)));
+    }
+
+    function _storeActionHashes(
+        uint256 proposalId,
+        bytes32[] calldata actionHashes,
+        uint256 len
+    ) internal {
+        uint256 i;
+        do {
+            _actionHash[proposalId][uint8(i)] = actionHashes[i];
+            unchecked { ++i; }
+        } while (i != len);
+    }
+
+    function _selector(bytes calldata data) internal pure returns (bytes4 s) {
+        if (data.length < 4) return bytes4(0);
+        assembly {
+            s := shr(224, calldataload(data.offset))
+        }
+    }
+
+    function _executeAction(
+        uint256 proposalId,
+        uint8 actionIndex,
+        address target,
+        uint96 value,
+        bytes calldata data,
+        bytes32 expected,
+        uint8 proposalType
+    ) internal returns (bytes memory ret) {
+        if (expected != _hashAction(target, value, data)) revert EBadValue();
+
+        if (proposalType == PROPOSAL_TYPE_NATIVE) {
+            if (_nativeTargetAllowed[target] != 2) revert ENativeTargetNotAllowed();
+        } 
+        else {
+// Anyone from the public should be allowed to execute anything that has reached
+// the approval threshold.
+            // Grantor proposals execute only DAO-owned actions.
+            if (target != address(this)) revert EGrantorTargetOnlySelf();
+        }
+
+        (bool ok, bytes memory callRet) = target.call{value: uint256(value)}(data);
+        if (!ok) {
+            assembly {
+                revert(add(callRet, 0x20), mload(callRet))
+            }
+        }
+
+        emit ProposalActionExecuted(
+            proposalId, 
+            actionIndex, 
+            target, 
+            _selector(data), 
+            value
+        );
+        ret = callRet;
     }
 
     /***************************************************************************
@@ -441,6 +578,10 @@ contract Grantors is ReentrancyGuard {
         );
     }
 
+// Remember: anything that is "privileged" goes into the privileged section.
+// This is the "ECOSYSTEM CONTRACT PRIVILEGE FUNCTIONALITY" section, above.
+// For example, any external function that is gated only to be fully executed
+// by certain privileged users or privileged contexts.
     function voteYes(
         uint256 proposalId
     ) external onlySeat returns (uint16 approvals) {
@@ -527,113 +668,6 @@ contract Grantors is ReentrancyGuard {
 
         emit ProposalExecuted(proposalId);
     }
-
-    /***************************************************************************
-     *
-     *
-     * PUBLIC ACCESS FUNCTIONALITY for the user and this contract
-     *
-     *
-     **************************************************************************/
-
-    /***************************************************************************
-     *
-     *
-     * INTERNAL FUNCTIONALITY
-     *
-     *
-     **************************************************************************/
-
-    function _seatIndexPlusOne(address account) internal view returns (uint8 i) {
-        i = _constitution.seatIndex(account);
-        if (i > GRANTOR_SEAT_COUNT) {
-            // Defensive: treat invalid registry results as non-seat.
-            i = 0;
-        }
-    }
-
-    function hashAction(address target, uint96 value, bytes calldata data)
-        external
-        pure
-        returns (bytes32 h)
-    {
-        h = _hashAction(target, value, data);
-    }
-
-    function _hashAction(address target, uint96 value, bytes calldata data)
-        internal
-        pure
-        returns (bytes32 h)
-    {
-        h = keccak256(abi.encode(target, value, keccak256(data)));
-    }
-
-    function _storeActionHashes(
-        uint256 proposalId,
-        bytes32[] calldata actionHashes,
-        uint256 len
-    ) internal {
-        uint256 i;
-        do {
-            _actionHash[proposalId][uint8(i)] = actionHashes[i];
-            unchecked { ++i; }
-        } while (i != len);
-    }
-
-    function _selector(bytes calldata data) internal pure returns (bytes4 s) {
-        if (data.length < 4) return bytes4(0);
-        assembly {
-            s := shr(224, calldataload(data.offset))
-        }
-    }
-
-    function _executeAction(
-        uint256 proposalId,
-        uint8 actionIndex,
-        address target,
-        uint96 value,
-        bytes calldata data,
-        bytes32 expected,
-        uint8 proposalType
-    ) internal returns (bytes memory ret) {
-        if (expected != _hashAction(target, value, data)) revert EBadValue();
-
-        if (proposalType == PROPOSAL_TYPE_NATIVE) {
-            if (_nativeTargetAllowed[target] != 2) revert ENativeTargetNotAllowed();
-        } 
-        else {
-            // Grantor proposals execute only DAO-owned actions.
-            if (target != address(this)) revert EGrantorTargetOnlySelf();
-        }
-
-        (bool ok, bytes memory callRet) = target.call{value: uint256(value)}(data);
-        if (!ok) {
-            assembly {
-                revert(add(callRet, 0x20), mload(callRet))
-            }
-        }
-
-        emit ProposalActionExecuted(
-            proposalId, 
-            actionIndex, 
-            target, 
-            _selector(data), 
-            value
-        );
-        ret = callRet;
-    }
-
-    /***************************************************************************
-     *
-     *
-     * PRIVATE FUNCTIONALITY -- Abstract Contracts ONLY!!!
-     *
-     * For abstract contracts, the private functionality will be within their
-     * very own section.  If this contract is not abstract, do not implement
-     * private functions, and remove this comment block!
-     *
-     *
-     **************************************************************************/
 
     function daoSetProposalFee(uint96 newFee) external onlySelf {
         // Store as fee+1 so it can never become 0.
@@ -744,6 +778,18 @@ contract Grantors is ReentrancyGuard {
             emit EmergencyUpgradeExecuted(msg.sender, geniusRegistry, newGrantor, count);
         }
     }
+
+    /***************************************************************************
+     *
+     *
+     * PRIVATE FUNCTIONALITY -- Abstract Contracts ONLY!!!
+     *
+     * For abstract contracts, the private functionality will be within their
+     * very own section.  If this contract is not abstract, do not implement
+     * private functions, and remove this comment block!
+     *
+     *
+     **************************************************************************/
 
     /***************************************************************************
      *
