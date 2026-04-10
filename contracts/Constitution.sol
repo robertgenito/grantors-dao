@@ -67,10 +67,10 @@ contract Constitution {
         do {
             address s = seatsInit[i];
             if (s == address(0)) revert ENullAddress();
-            if (_seatIndexPlusOne[s] != 0) revert EExists();
-            _seats[i] = s;
+            if (_whitelistSeatIndexPlusOne[s] != 0) revert EExists();
+            _whitelistSeats[i] = s;
             unchecked {
-                _seatIndexPlusOne[s] = uint8(i + 1);
+                _whitelistSeatIndexPlusOne[s] = uint8(i + 1);
                 ++i;
             }
         } while (i != GRANTOR_SEAT_COUNT);
@@ -126,7 +126,7 @@ contract Constitution {
      **************************************************************************/
 
     function seats(uint256 index) external view returns (address seat) {
-        seat = _seats[index];
+        seat = _whitelistSeats[index];
     }
 
     function seatIndex(address account) 
@@ -134,15 +134,15 @@ contract Constitution {
         view 
         returns (uint8 indexPlusOne) 
     {
-        indexPlusOne = _seatIndexPlusOne[account];
+        indexPlusOne = _whitelistSeatIndexPlusOne[account];
     }
 
-    function emergencyCount(address newGrantor) 
+    function emergencyCount(address newDaoContract) 
         external 
         view 
         returns (uint8 c) 
     {
-        uint256 packed = _emergency[newGrantor];
+        uint256 packed = _emergency[newDaoContract];
         c = uint8(packed >> 16);
     }
 
@@ -158,8 +158,8 @@ contract Constitution {
 // This first version will be super simple.  It's important to get terminology as accurate as possible!
 // OR, maybe these "seats" are whitelistSeats?  (accounts that can always have a seat, i.e. they're
 // whitelisted..)
-    address[GRANTOR_SEAT_COUNT] internal _seats;
-    mapping(address => uint8) internal _seatIndexPlusOne;
+    address[GRANTOR_SEAT_COUNT] internal _whitelistSeats;
+    mapping(address => uint8) internal _whitelistSeatIndexPlusOne;
 
     // newGrantor => packed [bitmap:16 | count:8]
     mapping(address => uint256) internal _emergency;
@@ -184,8 +184,8 @@ contract Constitution {
      *
      **************************************************************************/
 
-    modifier onlySeat() {
-        if (_seatIndexPlusOne[msg.sender] == 0) {
+    modifier onlyWhitelistedGrantorSeat() {
+        if (_whitelistSeatIndexPlusOne[msg.sender] == 0) {
             revert EBadSeat();
         }
         _;
@@ -227,31 +227,30 @@ contract Constitution {
      * @notice Emergency signal for a future Grantor/DAO upgrade.
      * @dev YES-only cumulative signaling: cannot decrease.
      */
-    function signalEmergencyUpgrade(address newGrantor, bool emitLog)
+    function signalEmergencyUpgrade(address newDaoContract, bool emitLog)
         external
-        onlySeat
+        onlyWhitelistedGrantorSeat
         returns (uint8 count)
     {
 // let's get terminology down: have the "grantor" be the person (the account)
 // and "DAO Contract" to refer to the mechanics of the governance.
 // I'm implying that a better name for "newGrantor" is "newDaoContract".
-        if (newGrantor == address(0)) revert ENullAddress();
+        if (newDaoContract == address(0)) revert ENullAddress();
 
 // isn't it still better on gas that everything in memory is uint256 ?
-        uint8 seat = _seatIndexPlusOne[msg.sender];
-        unchecked { seat -= 1; }
+        uint256 seat = uint256(_whitelistSeatIndexPlusOne[msg.sender]) - 1;
         uint16 bit = uint16(1 << seat);
 
-        uint256 packed = _emergency[newGrantor];
+        uint256 packed = _emergency[newDaoContract];
         uint16 bm = uint16(packed);
         if ((bm & bit) != 0) revert EExists();
 
         bm |= bit;
         count = uint8(packed >> 16) + 1;
-        _emergency[newGrantor] = uint256(bm) | (uint256(count) << 16);
+        _emergency[newDaoContract] = uint256(bm) | (uint256(count) << 16);
 
         if (emitLog) {
-            emit EmergencySignaled(msg.sender, newGrantor, count);
+            emit EmergencySignaled(msg.sender, newDaoContract, count);
         }
     }
 
