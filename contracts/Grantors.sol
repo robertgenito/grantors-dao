@@ -44,6 +44,10 @@ error EGrantorTargetOnlySelf();
 error EEmergencyAlreadyUsed();
 error EGrantorNotUpdated();
 error ESeatNotActive();
+error EUnsupportedFeeToken();
+error EInsufficientProposalFee();
+error EUnexpectedNativeValue();
+error EReentrant();
 
 /*******************************************************************************
  *
@@ -61,6 +65,7 @@ interface IConstitutionSeats {
 // the code and implementing the code.
 uint256 constant GRANTOR_SEAT_COUNT = 16;
 uint256 constant GRANTOR_PROPOSAL_LIFETIME = 29 days;
+uint256 constant GRANTOR_EXECUTION_GRACE = 5 days;
 uint256 constant GRANTOR_MAX_ACTIONS = 8;
 uint256 constant GRANTOR_EXECUTE_THRESHOLD = 10;
 uint256 constant GRANTOR_EMERGENCY_OVERRIDE_THRESHOLD = 5;
@@ -93,14 +98,20 @@ contract Grantors is ReentrancyGuard {
      *
      **************************************************************************/
 
-    constructor(address constitution, address devOverride) {
-        if (constitution == address(0) || devOverride == address(0)) {
+    constructor(address constitution, address devOverride, address geniV2) {
+        if (constitution == address(0) || devOverride == address(0) || geniV2 == address(0)) {
             revert ENullAddress();
         }
         _constitution = IConstitutionSeats(constitution);
         _devOverride = devOverride;
+        _geniV2 = geniV2;
+        _globals.nativeExecLock = 1;
 
-        _proposalFee = 0;
+        // v0.1 defaultsfee structure:
+        // - 5,000,000 GENI (v2)
+        // - 0.02 ETH
+        _proposalFeeByToken[geniV2] = 5_000_000e9;
+        _proposalFeeByToken[address(0)] = 0.02 ether;
     }
 
     /***************************************************************************
@@ -148,6 +159,7 @@ contract Grantors is ReentrancyGuard {
         uint40 txExpiresOn,
         uint40 expiresOn,
         uint8 actionCount,
+        bytes32 data,
         bytes32 url
     );
 
@@ -168,6 +180,7 @@ contract Grantors is ReentrancyGuard {
     );
 
     event ProposalFeeChanged(uint96 fee);
+    event ProposalFeeTokenChanged(address indexed token, uint96 fee);
     event EmergencyDisbursed(address indexed token, address indexed to, uint256 amount);
     event EmergencySignaled(address indexed seat, address indexed newGrantor, uint8 count);
     event DevOverrideRequested(address indexed requester, address indexed newGrantor, uint8 count);
@@ -209,12 +222,22 @@ contract Grantors is ReentrancyGuard {
 
         // Slot 2
         uint16 approvals;     // 2
+
+        // it’s meant to identify how to interpret proposal link data, e.g.:
+        // 0 = unspecified
+        // 1 = https
+        // 2 = http
+        // 3 = ipfs
+        uint8 linkProtocol;   // 1
 // I appreciate this approach, but let's keep it an actual tally count.
         // Keep tally as approvals, and track uniqueness in _votedBySeat mapping.
 
 
-// Slot 3 :)
-        bytes32 url;          // 32 (occupies its own slot; kept separate for UI)
+// Slot 3-6: proposal metadata for UI display/discovery.
+        bytes32 data;
+        bytes32 url;
+        bytes32 title;
+        bytes32 preheader;
     }
 
     /***************************************************************************
@@ -224,6 +247,29 @@ contract Grantors is ReentrancyGuard {
      *
      *
      **************************************************************************/
+
+    //These don't consume storage only used for calldata
+    struct ProposeInput {
+        uint40 eta;
+        uint40 txExpiresOn;
+        uint8 linkProtocol;
+        bytes32 data;
+        bytes32 url;
+        bytes32 title;
+        bytes32 preheader;
+        address feeToken;
+        uint256 proposalType;
+    }
+
+    // Global state packing
+    struct GlobalState {
+        // tracks proposal data. next proposalId, _proposalCount
+        uint64 proposalCount;
+
+        // block recursive re-entry during external/native action execution 
+        // without paying mutex cost on other paths.
+        uint8 nativeExecLock; // 1 = unlocked, 2 = locked
+    }
 
     /***************************************************************************
      *
@@ -235,7 +281,11 @@ contract Grantors is ReentrancyGuard {
 
 // why not just make the variable public from the start?  my memory may be rusty
     function fee() public view returns (uint96 fee_) {
-        fee_ = _proposalFee;
+        fee_ = _proposalFeeByToken[address(0)];
+    }
+
+    function feeByToken(address token) public view returns (uint96 fee_) {
+        fee_ = _proposalFeeByToken[token];
     }
 
     /***************************************************************************
@@ -246,8 +296,9 @@ contract Grantors is ReentrancyGuard {
      *
      **************************************************************************/
 
-    // proposalId starts at 1; 0 is prohibited
-    uint256 internal _proposalCount;
+    // Packed global scalar state.
+    GlobalState internal _globals;
+    address internal immutable _geniV2;
 
 // Why not make it public?  that way, the UI can freely grab proposals without
 // the cost of implementing access or functions.
@@ -257,8 +308,8 @@ contract Grantors is ReentrancyGuard {
     // proposalId => actionIndex => actionHash
     mapping(uint256 => mapping(uint256 => bytes32)) internal _actionHash;
 
-    // proposal fee in native token
-    uint96 internal _proposalFee;
+    // proposal fee by token (address(0) = native token)
+    mapping(address => uint96) internal _proposalFeeByToken;
 
     // newGrantor => packed [bitmap:16 | count:8]
     mapping(address => uint256) internal _emergency;
@@ -427,6 +478,7 @@ contract Grantors is ReentrancyGuard {
         bytes32[] calldata actionHashes,
         uint256 len
     ) internal {
+        if (len == 0) return;
         uint256 i;
         do {
             _actionHash[proposalId][i] = actionHashes[i];
@@ -518,47 +570,56 @@ contract Grantors is ReentrancyGuard {
      */
     function propose(
         bytes32[] calldata actionHashes,
-        uint40 eta,
-        uint40 txExpiresOn,
-        bytes32 url,
-        uint256 proposalType
+        ProposeInput calldata input
     ) external payable returns (uint256 proposalId) {
         uint256 len = actionHashes.length;
-        if (len == 0 || len > GRANTOR_MAX_ACTIONS) revert EBadArrayLength();
-        if (proposalType != PROPOSAL_TYPE_NATIVE && proposalType != PROPOSAL_TYPE_GRANTOR) {
+        if (len > GRANTOR_MAX_ACTIONS) revert EBadArrayLength();
+        if (input.proposalType != PROPOSAL_TYPE_NATIVE && input.proposalType != PROPOSAL_TYPE_GRANTOR) {
             revert EBadProposalType();
         }
-
-        if (msg.value < _proposalFee) revert EBadValue();
+        uint96 feeRequired = _proposalFeeByToken[input.feeToken];
+        if (feeRequired == 0) revert EUnsupportedFeeToken();
+        if (input.feeToken == address(0)) {
+            if (msg.value < feeRequired) revert EInsufficientProposalFee();
+        } 
+        else {
+            if (msg.value != 0) revert EUnexpectedNativeValue();
+            IERC20(input.feeToken).safeTransferFrom(msg.sender, address(this), feeRequired);
+        }
 
         unchecked {
-            proposalId = ++_proposalCount;
+            proposalId = uint256(++_globals.proposalCount);
         }
 
         uint40 now40 = uint40(block.timestamp);
         uint40 expiresOn = now40 + uint40(GRANTOR_PROPOSAL_LIFETIME);
-        if (eta != 0 && eta > expiresOn) revert EBadValue();
-        if (txExpiresOn != 0 && txExpiresOn < eta) revert EBadValue();
+        if (input.eta != 0 && input.eta > expiresOn) revert EBadValue();
+        if (input.txExpiresOn != 0 && input.txExpiresOn < input.eta) revert EBadValue();
 
         ProposalCore storage p = _proposals[proposalId];
         p.proposer = msg.sender;
         p.createdOn = now40;
-        p.eta = eta;
-        p.txExpiresOn = txExpiresOn;
-        p.meta = _packMeta(len, proposalType, false);
+        p.eta = input.eta;
+        p.txExpiresOn = input.txExpiresOn;
+        p.meta = _packMeta(len, input.proposalType, false);
         p.approvals = 0;
-        p.url = url;
+        p.linkProtocol = input.linkProtocol;
+        p.data = input.data;
+        p.url = input.url;
+        p.title = input.title;
+        p.preheader = input.preheader;
 
         _storeActionHashes(proposalId, actionHashes, len);
 
         emit ProposalCreated(
             proposalId,
             msg.sender,
-            eta,
-            txExpiresOn,
+            input.eta,
+            input.txExpiresOn,
             expiresOn,
             uint8(len),
-            url
+            input.data,
+            input.url
         );
     }
 
@@ -573,7 +634,7 @@ contract Grantors is ReentrancyGuard {
 
         ProposalCore storage p = _proposals[proposalId];
         uint8 meta = p.meta;
-        if (_actionCount(meta) == 0) revert ENotProposed();
+        if (p.proposer == address(0)) revert ENotProposed();
         if (_executed(meta)) revert EExists();
         if (uint40(block.timestamp) > p.createdOn + uint40(GRANTOR_PROPOSAL_LIFETIME)) revert EExpired();
 
@@ -590,6 +651,30 @@ contract Grantors is ReentrancyGuard {
         emit ProposalYesVote(proposalId, msg.sender, approvals);
     }
 
+    function removeVote(
+        uint256 proposalId
+    ) external onlyGrantorSeat returns (uint16 approvals) {
+        if (_seatActive[msg.sender] != 2) revert ESeatNotActive();
+
+        ProposalCore storage p = _proposals[proposalId];
+        uint8 meta = p.meta;
+        if (p.proposer == address(0)) revert ENotProposed();
+        if (_executed(meta)) revert EExists();
+        if (uint40(block.timestamp) > p.createdOn + uint40(GRANTOR_PROPOSAL_LIFETIME)) revert EExpired();
+
+        uint8 seat = _seatIndexPlusOne(msg.sender);
+        unchecked {
+            seat -= 1;
+        }
+        if (_votedBySeat[proposalId][seat] != 2) revert EBadValue();
+        _votedBySeat[proposalId][seat] = 1;
+
+        approvals = p.approvals - 1;
+        p.approvals = approvals;
+
+        emit ProposalYesVote(proposalId, msg.sender, approvals);
+    }
+
     function registerSeat() external onlyGrantorSeat {
         if (_seatActive[msg.sender] == 2) revert EExists();
         _seatActive[msg.sender] = 2;
@@ -601,7 +686,7 @@ contract Grantors is ReentrancyGuard {
         bytes32 reason
     ) external onlyGrantorSeat {
         ProposalCore storage p = _proposals[proposalId];
-        if (_actionCount(p.meta) == 0) revert ENotProposed();
+        if (p.proposer == address(0)) revert ENotProposed();
 
         // No state change is allowed for "disagree".
         emit ProposalDisagree(proposalId, msg.sender, reason);
@@ -612,15 +697,15 @@ contract Grantors is ReentrancyGuard {
         address[] calldata targets,
         uint96[] calldata values,
         bytes[] calldata datas
-    ) external nonReentrant returns (bytes[] memory rets) {
+    ) external returns (bytes[] memory rets) {
         ProposalCore storage p = _proposals[proposalId];
         uint8 meta = p.meta;
-        if (_actionCount(meta) == 0) revert ENotProposed();
+        if (p.proposer == address(0)) revert ENotProposed();
         if (_executed(meta)) revert EExists();
         if (p.approvals < GRANTOR_EXECUTE_THRESHOLD) revert ENotEnoughVotes();
 
         uint40 now40 = uint40(block.timestamp);
-        if (now40 > p.createdOn + uint40(GRANTOR_PROPOSAL_LIFETIME)) revert EExpired();
+        if (now40 > p.createdOn + uint40(GRANTOR_PROPOSAL_LIFETIME + GRANTOR_EXECUTION_GRACE)) revert EExpired();
         if (p.eta != 0 && now40 < p.eta) revert ENotExecutableYet();
         if (p.txExpiresOn != 0 && now40 > p.txExpiresOn) revert EExpired();
 
@@ -633,25 +718,49 @@ contract Grantors is ReentrancyGuard {
         rets = new bytes[](len);
         uint256 i;
         uint256 proposalType = _proposalType(meta);
-        do {
-            rets[i] = _executeAction(
-                proposalId,
-                i,
-                targets[i],
-                values[i],
-                datas[i],
-                proposalType
-            );
+        if (proposalType == PROPOSAL_TYPE_NATIVE) {
+            if (_globals.nativeExecLock == 2) revert EReentrant();
+            _globals.nativeExecLock = 2;
+            while (i != len) {
+                rets[i] = _executeAction(
+                    proposalId,
+                    i,
+                    targets[i],
+                    values[i],
+                    datas[i],
+                    proposalType
+                );
 
-            unchecked { ++i; }
-        } while (i != len);
+                unchecked { ++i; }
+            }
+            _globals.nativeExecLock = 1;
+        } 
+        else {
+            while (i != len) {
+                rets[i] = _executeAction(
+                    proposalId,
+                    i,
+                    targets[i],
+                    values[i],
+                    datas[i],
+                    proposalType
+                );
+
+                unchecked { ++i; }
+            }
+        }
 
         emit ProposalExecuted(proposalId);
     }
 
     function daoSetProposalFee(uint96 newFee) external onlySelf {
-        _proposalFee = newFee;
+        _proposalFeeByToken[address(0)] = newFee;
         emit ProposalFeeChanged(newFee);
+    }
+
+    function daoSetProposalFeeToken(address token, uint96 newFee) external onlySelf {
+        _proposalFeeByToken[token] = newFee;
+        emit ProposalFeeTokenChanged(token, newFee);
     }
 
     function daoSetNativeTargetAllowed(
@@ -675,7 +784,7 @@ contract Grantors is ReentrancyGuard {
     }
 
     function daoSweepETH(address to, uint256 amount) 
-        external onlySelf nonReentrant 
+        external onlySelf
     {
         if (to == address(0)) revert ENullAddress();
         (bool ok, ) = to.call{value: amount}("");
