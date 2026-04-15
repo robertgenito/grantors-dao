@@ -3,6 +3,20 @@
 // Genius (C) 2026. All Rights Reserved.
 pragma solidity 0.8.26;
 
+// Constitution -> rename to Grantors.sol
+//      * This file will be launched with the Genius contracts.
+//      * Genius will have the address of Grantors.sol as a constant to prevent
+//          gas bloat.
+//      * "Grantors" will become the most fundamental actions.
+//      * Grantor specific functions are mentioned in the technical white paper
+//          https://geni.to/smartcontract
+//      * THE CONTRACT ADDRESS OF THIS CONTRACT SHOULD BE PREDETERMINED,
+//          so that Genius can know who it points to.
+//      * THAT PREDETERMINED ADDRESS, is what Genius's constant is set to:
+//          AllContracts.sol#GENIUS_CONTRACT_GRANTORS;
+//      * Genius's ecosystem will already know who this DAO is.
+//      * IMPORTANT: whatever account launches this, IS THE FIRST OWNER.
+
 /*******************************************************************************
  *
  * Genius Constitution
@@ -45,6 +59,7 @@ uint8 constant GRANTOR_SEAT_COUNT = 16;
 uint40 constant GRANTOR_PROPOSAL_LIFETIME = 29 days;
 uint8 constant GRANTOR_MAX_ACTIONS = 8;
 uint16 constant GRANTOR_EXECUTE_THRESHOLD = 10;
+
 /*******************************************************************************
  *
  *
@@ -59,8 +74,9 @@ contract Constitution {
      * Contract Construction: will always go at the top of the contract!
      *
      **************************************************************************/
-
     constructor(address[GRANTOR_SEAT_COUNT] memory seatsInit) {
+        owner = msg.sender;
+
         // Storage strategy: 0 = non-existent, 1 = false, 2 = true.
         // seatIndexPlusOne uses 0 as non-seat sentinel.
         uint256 i;
@@ -125,6 +141,13 @@ contract Constitution {
      *
      **************************************************************************/
 
+
+    // Genius -> const GRANTOR_CONTRACT_ADDRESS ->
+    // protected functions that only the Grantor(s) can run...
+    // if (msg.sender != GRANTOR_CONTRACT_ADDRESS)) { ...
+    address owner;
+    // When the Owner (the DAO Contract) -- GeniusDao?
+
     function seats(uint256 index) external view returns (address seat) {
         seat = _whitelistSeats[index];
     }
@@ -184,6 +207,12 @@ contract Constitution {
      *
      **************************************************************************/
 
+    modifier onlyOwner() {
+        if (msg.sender == owner) {
+            _;
+        }
+    }
+
     modifier onlyWhitelistedGrantorSeat() {
         if (_whitelistSeatIndexPlusOne[msg.sender] == 0) {
             revert EBadSeat();
@@ -206,6 +235,9 @@ contract Constitution {
      *
      *
      **************************************************************************/
+    function electNewGrantor() onlyOwner {
+
+    }
 
     /***************************************************************************
      *
@@ -222,6 +254,9 @@ contract Constitution {
      *
      *
      **************************************************************************/
+
+
+
 
     /**
      * @notice Emergency signal for a future Grantor/DAO upgrade.

@@ -3,6 +3,10 @@
 // Genius (C) 2026. All Rights Reserved.
 pragma solidity 0.8.26;
 
+// Grantors.sol -> rename to GeniusDao.sol
+//      * This file is launched solo ... it can be launched any time.  it can
+//          be launched AFTER Genius.
+
 /*******************************************************************************
  *
  * Genius Grantors
@@ -15,11 +19,8 @@ pragma solidity 0.8.26;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "./interfaces/genius/v2/IGeniusGrantorRegistry.sol";
-
-// Hehe yea, core won't be available :)
-
-// import "../Core.sol";
+//import "./interfaces/genius/v2/IGeniusGrantorRegistry.sol";
+import "./interfaces/IGrantor.sol";
 
 /*******************************************************************************
  *
