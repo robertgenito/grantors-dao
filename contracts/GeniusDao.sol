@@ -3,6 +3,10 @@
 // Genius (C) 2026. All Rights Reserved.
 pragma solidity 0.8.26;
 
+// Grantors.sol -> rename to GeniusDao.sol
+//      * This file is launched solo ... it can be launched any time.  it can
+//          be launched AFTER Genius.
+
 /*******************************************************************************
  *
  * Genius Grantors
@@ -15,11 +19,7 @@ pragma solidity 0.8.26;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "./interfaces/genius/v2/IGeniusGrantorRegistry.sol";
-
-// Hehe yea, core won't be available :)
-
-// import "../Core.sol";
+// import "./interfaces/IGrantor.sol";
 
 /*******************************************************************************
  *
@@ -37,12 +37,9 @@ error ENotEnoughVotes();
 error ENotExecutableYet();
 error ENotProposed();
 error ENotSelf();
-error EUnauthorizedDev();
 error EBadProposalType();
 error ENativeTargetNotAllowed();
 error EGrantorTargetOnlySelf();
-error EEmergencyAlreadyUsed();
-error EGrantorNotUpdated();
 error ESeatNotActive();
 error EUnsupportedFeeToken();
 error EInsufficientProposalFee();
@@ -59,6 +56,10 @@ interface IConstitutionSeats {
     function seatIndex(address account) external view returns (uint8 indexPlusOne);
 }
 
+interface IGrantorOwnership {
+    function acceptOwnership() external;
+}
+
 // In most cases, I found it better to leave constants at their default size of `uint256`
 // because then it's easier for the engineer to read visually.  When the size constraints
 // actually become important, then you see it directly in the code when you're reading
@@ -68,12 +69,12 @@ uint256 constant GRANTOR_PROPOSAL_LIFETIME = 29 days;
 uint256 constant GRANTOR_EXECUTION_GRACE = 5 days;
 uint256 constant GRANTOR_MAX_ACTIONS = 8;
 uint256 constant GRANTOR_EXECUTE_THRESHOLD = 10;
-uint256 constant GRANTOR_EMERGENCY_OVERRIDE_THRESHOLD = 5;
 uint256 constant PROPOSAL_TYPE_NATIVE = 1;
 uint256 constant PROPOSAL_TYPE_GRANTOR = 2;
 uint8 constant PM_ACTION_COUNT_MASK = 0x0f;
 uint8 constant PM_EXECUTED_MASK = 0x10;
 uint8 constant PM_PROPOSAL_TYPE_SHIFT = 5;
+// TODO: ^-- All of these can be in a LIB
 
 /*******************************************************************************
  *
@@ -89,7 +90,7 @@ uint8 constant PM_PROPOSAL_TYPE_SHIFT = 5;
  *
  ******************************************************************************/
 
-contract Grantors is ReentrancyGuard {
+contract GeniusDao is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /***************************************************************************
@@ -103,7 +104,6 @@ contract Grantors is ReentrancyGuard {
             revert ENullAddress();
         }
         _constitution = IConstitutionSeats(constitution);
-        _devOverride = devOverride;
         _geniV2 = geniV2;
         _globals.nativeExecLock = 1;
 
@@ -137,7 +137,6 @@ contract Grantors is ReentrancyGuard {
 // It's not that the seats are unchangeable; it's that the interface between the
 // grantors of the world and genius's code is immutable.
     IConstitutionSeats internal immutable _constitution;
-    address internal immutable _devOverride;
 
     /***************************************************************************
      *
@@ -159,8 +158,8 @@ contract Grantors is ReentrancyGuard {
         uint40 txExpiresOn,
         uint40 expiresOn,
         uint8 actionCount,
-        bytes32 data,
-        bytes32 url
+        uint8 linkProtocol,
+        bytes32 metadataHash
     );
 
     event ProposalYesVote(uint256 indexed proposalId, address indexed voter, uint16 approvals);
@@ -182,18 +181,6 @@ contract Grantors is ReentrancyGuard {
     event ProposalFeeChanged(uint96 fee);
     event ProposalFeeTokenChanged(address indexed token, uint96 fee);
     event EmergencyDisbursed(address indexed token, address indexed to, uint256 amount);
-    event EmergencySignaled(address indexed seat, address indexed newGrantor, uint8 count);
-    event DevOverrideRequested(address indexed requester, address indexed newGrantor, uint8 count);
-
-// what's the "geniusRegistry"?
-// The address of the GENIUS contract it has `changeGrantor` function
-// We'll be implementing the Grantor change i.e, the two-way change as discussed
-    event EmergencyUpgradeExecuted(
-        address indexed requester,
-        address indexed geniusRegistry,
-        address indexed newGrantor,
-        uint8 count
-    );
 
 // Let's call this "Accepted", like "GrantorWhitelistAccepted", implying that
 // the grantor's wallet account has accepted their whitelist invitation.
@@ -228,16 +215,13 @@ contract Grantors is ReentrancyGuard {
         // 1 = https
         // 2 = http
         // 3 = ipfs
-        uint8 linkProtocol;   // 1
+        uint8 linkProtocol;   // e.g, IPFS, HTTPS, etc.
 // I appreciate this approach, but let's keep it an actual tally count.
         // Keep tally as approvals, and track uniqueness in _votedBySeat mapping.
 
 
-// Slot 3-6: proposal metadata for UI display/discovery.
-        bytes32 data;
-        bytes32 url;
-        bytes32 title;
-        bytes32 preheader;
+// Slot 3+: proposal metadata for UI display/discovery.
+        bytes32 metadataHash;
     }
 
     /***************************************************************************
@@ -253,10 +237,7 @@ contract Grantors is ReentrancyGuard {
         uint40 eta;
         uint40 txExpiresOn;
         uint8 linkProtocol;
-        bytes32 data;
-        bytes32 url;
-        bytes32 title;
-        bytes32 preheader;
+        bytes32 metadataHash;
         address feeToken;
         uint256 proposalType;
     }
@@ -311,14 +292,8 @@ contract Grantors is ReentrancyGuard {
     // proposal fee by token (address(0) = native token)
     mapping(address => uint96) internal _proposalFeeByToken;
 
-    // newGrantor => packed [bitmap:16 | count:8]
-    mapping(address => uint256) internal _emergency;
-
     // target => 0(non-existent), 1(false), 2(true)
     mapping(address => uint8) internal _nativeTargetAllowed;
-
-    // emergency key => 0(non-existent), 1(false), 2(true)
-    mapping(bytes32 => uint8) internal _emergencyUpgradeUsed;
 
     // seat => 0(non-existent), 1(false), 2(true)
     mapping(address => uint8) internal _seatActive;
@@ -401,15 +376,6 @@ contract Grantors is ReentrancyGuard {
         returns (bytes32 h)
     {
         h = _actionHash[proposalId][index];
-    }
-
-    function emergencyCount(address newGrantor) 
-        external 
-        view 
-        returns (uint8 c) 
-    {
-        uint256 packed = _emergency[newGrantor];
-        c = uint8(packed >> 16);
     }
 
     function isNativeTargetAllowed(address target) 
@@ -604,10 +570,7 @@ contract Grantors is ReentrancyGuard {
         p.meta = _packMeta(len, input.proposalType, false);
         p.approvals = 0;
         p.linkProtocol = input.linkProtocol;
-        p.data = input.data;
-        p.url = input.url;
-        p.title = input.title;
-        p.preheader = input.preheader;
+        p.metadataHash = input.metadataHash;
 
         _storeActionHashes(proposalId, actionHashes, len);
 
@@ -618,8 +581,8 @@ contract Grantors is ReentrancyGuard {
             input.txExpiresOn,
             expiresOn,
             uint8(len),
-            input.data,
-            input.url
+            input.linkProtocol,
+            input.metadataHash
         );
     }
 
@@ -792,79 +755,9 @@ contract Grantors is ReentrancyGuard {
         emit EmergencyDisbursed(address(0), to, amount);
     }
 
-    /***************************************************************************
-     *
-     * EMERGENCY UPGRADE SIGNALING (no vote decrement)
-     *
-     **************************************************************************/
-
-    function signalEmergencyUpgrade(address newGrantor, bool emitLog)
-        external
-        onlyGrantorSeat
-        returns (uint8 count)
-    {
-        if (newGrantor == address(0)) revert ENullAddress();
-
-        uint8 seat = _seatIndexPlusOne(msg.sender);
-        unchecked { seat -= 1; }
-        uint16 bit = uint16(1 << seat);
-
-        uint256 packed = _emergency[newGrantor];
-        uint16 bm = uint16(packed);
-        if ((bm & bit) != 0) revert EExists();
-
-        bm |= bit;
-        count = uint8(packed >> 16) + 1;
-        _emergency[newGrantor] = uint256(bm) | (uint256(count) << 16);
-
-        if (emitLog) {
-            emit EmergencySignaled(msg.sender, newGrantor, count);
-        }
-        // TODO: should we have? else { revert(); }
-    }
-
-    function devOverrideRequest(address newGrantor, bool emitLog) external {
-        if (msg.sender != _devOverride) revert EUnauthorizedDev();
-        if (newGrantor == address(0)) revert ENullAddress();
-
-        uint8 count = uint8(_emergency[newGrantor] >> 16);
-        if (emitLog) {
-            emit DevOverrideRequested(msg.sender, newGrantor, count);
-        }
-    }
-
-    /**
-     * @notice Manual emergency override for DAO upgrade/migration actions.
-     * @dev Requires dev override account and at least 5 seat signals
-     *      for the provided newGrantor. Execution target/data are flexible
-     *      to support various grantor-registry upgrade paths.
-     */
-    function devOverrideUpgrade(
-        address geniusRegistry, 
-        address newGrantor, 
-        bool emitLog
-    )
-        external
-        nonReentrant
-    {
-        if (msg.sender != _devOverride) revert EUnauthorizedDev();
-        if (geniusRegistry == address(0) || newGrantor == address(0)) revert ENullAddress();
-
-        uint8 count = uint8(_emergency[newGrantor] >> 16);
-        if (count < GRANTOR_EMERGENCY_OVERRIDE_THRESHOLD) revert ENotEnoughVotes();
-
-        bytes32 key = keccak256(abi.encode(geniusRegistry, newGrantor));
-        if (_emergencyUpgradeUsed[key] == 2) revert EEmergencyAlreadyUsed();
-        _emergencyUpgradeUsed[key] = 2;
-
-        IGeniusGrantorRegistry(geniusRegistry).changeGrantor(newGrantor);
-        if (IGeniusGrantorRegistry(geniusRegistry).grantor() != newGrantor) {
-            revert EGrantorNotUpdated();
-        }
-
-        if (emitLog) {
-            emit EmergencyUpgradeExecuted(msg.sender, geniusRegistry, newGrantor, count);
-        }
+    function daoAcceptGrantorOwnership(address grantor) external onlySelf {
+        if (grantor == address(0)) revert ENullAddress();
+        IGrantorOwnership(grantor).acceptOwnership();
     }
 
     /***************************************************************************
