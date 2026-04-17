@@ -87,33 +87,20 @@ module.exports = {
   },
   networks: {
     hardhat: {
-//      allowUnlimitedContractSize: true,
       blockGasLimit: 352450000,
       allowUnlimitedContractSize: true,
-//      loggingEnabled: true, // Enable detailed logging
-//    },
-//    sepolia: {
-//      url: `https://sepolia.infura.io/v3/${process.env.INFURA_API_KEY}`,
-//      accounts: [
-//        process.env.GENIUS_CONTRACT_AUCTIONS,
-//        process.env.GENIUS_CONTRACT_CALENDAR,
-//        process.env.GENIUS_CONTRACT_COLLATERAL_AUCTIONS,
-//        process.env.GENIUS_CONTRACT_GIFT_TOKEN,
-//        process.env.GENIUS_CONTRACT_VAULT,
-//        process.env.GENIUS_CONTRACT_MINERS,
-//        process.env.GENIUS_CONTRACT_NFT_CONTROLLER,
-//        process.env.GENIUS_CONTRACT_NFT_EDITION,
-//        process.env.GENIUS_CONTRACT_NFT_ROYALTIES,
-//        process.env.GENIUS_CONTRACT_PREMIUM,
-//        process.env.GENIUS_CONTRACT_REWARDS,
-//        process.env.GENIUS_CONTRACT_TOKEN
-//      ],
-//      gasPrice: 20000000000,
-//      gas: 7000000
-    }
+    },
+    sepolia: {
+      url: process.env.SEPOLIA_RPC_URL || "",
+      accounts: process.env.SEPOLIA_DEPLOYER_PRIVATE_KEY // Gotta get your own keys Brah!!
+        ? [process.env.SEPOLIA_DEPLOYER_PRIVATE_KEY]
+        : [],
+    },
+  },
+  etherscan: {
+    apiKey: process.env.ETHERSCAN_API_KEY || "",
   },
   contractSizer: {
     only: ['^contracts\\/v2\\/.+\\.sol:[^\\/]+$']
   }
 };
-
