@@ -43,6 +43,9 @@ pragma solidity 0.8.26;
 error EBadSeat();
 error EExists();
 error ENullAddress();
+error EUnauthorized();
+error ENotPendingOwner();
+error ECallFailed();
 
 /*******************************************************************************
  *
@@ -59,6 +62,7 @@ uint8 constant GRANTOR_SEAT_COUNT = 16;
 uint40 constant GRANTOR_PROPOSAL_LIFETIME = 29 days;
 uint8 constant GRANTOR_MAX_ACTIONS = 8;
 uint16 constant GRANTOR_EXECUTE_THRESHOLD = 10;
+// ^-- All of these can be in a LIB
 
 /*******************************************************************************
  *
@@ -68,7 +72,7 @@ uint16 constant GRANTOR_EXECUTE_THRESHOLD = 10;
  *
  ******************************************************************************/
 
-contract Constitution {
+contract Grantor {
     /***************************************************************************
      *
      * Contract Construction: will always go at the top of the contract!
@@ -116,6 +120,9 @@ contract Constitution {
         address indexed newGrantor, 
         uint8 count
     );
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed pendingOwner);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event GeniusCallExecuted(address indexed target, uint96 value, bytes4 selector);
 
     /***************************************************************************
      *
@@ -145,7 +152,13 @@ contract Constitution {
     // Genius -> const GRANTOR_CONTRACT_ADDRESS ->
     // protected functions that only the Grantor(s) can run...
     // if (msg.sender != GRANTOR_CONTRACT_ADDRESS)) { ...
-    address owner;
+    address public owner;
+    address private pendingOwner;
+
+    function getPendingOwner() external view returns (address pendingOwner_) {
+        pendingOwner_ = pendingOwner;
+    }
+
     // When the Owner (the DAO Contract) -- GeniusDao?
 
     function seats(uint256 index) external view returns (address seat) {
@@ -235,8 +248,41 @@ contract Constitution {
      *
      *
      **************************************************************************/
-    function electNewGrantor() onlyOwner {
+    // Two-way owner transfer:
+    // 1) current owner nominates a new owner (contract or account),
+    // 2) nominated owner calls acceptOwnership.
+    function electNewGrantor(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ENullAddress();
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
 
+    function acceptOwnership() external {
+        address nominated = pendingOwner;
+        if (msg.sender != nominated) revert ENotPendingOwner();
+        // address previousOwner = owner;
+        owner = nominated;
+        pendingOwner = address(0);
+        emit OwnershipTransferred(owner, nominated);
+    }
+
+    // The Grantor contract is the single "house" that executes calls into Genius contracts.
+    // Owner is expected to be GeniusDao once ownership is accepted.
+    function callGenius(address target, uint96 value, bytes calldata data)
+        external
+        payable
+        onlyOwner
+        returns (bytes memory ret)
+    {
+        if (target == address(0)) revert ENullAddress();
+
+        (bool ok, bytes memory callRet) = target.call{value: uint256(value)}(data);
+        if (!ok) {
+            revert ECallFailed();
+        }
+
+        emit GeniusCallExecuted(target, value, bytes4(data));
+        ret = callRet;
     }
 
     /***************************************************************************
@@ -254,9 +300,6 @@ contract Constitution {
      *
      *
      **************************************************************************/
-
-
-
 
     /**
      * @notice Emergency signal for a future Grantor/DAO upgrade.
