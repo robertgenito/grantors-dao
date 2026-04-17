@@ -20,6 +20,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./interfaces/IGrantor.sol";
+import "./interfaces/IGeniusV2.sol";
 
 /*******************************************************************************
  *
@@ -41,7 +42,6 @@ error EBadProposalType();
 error ENativeTargetNotAllowed();
 error EGrantorTargetOnlySelf();
 error ESeatNotActive();
-error EUnsupportedFeeToken();
 error EInsufficientProposalFee();
 error EUnexpectedNativeValue();
 error EReentrant();
@@ -52,13 +52,6 @@ error EReentrant();
  *
  ******************************************************************************/
 
-interface IConstitutionSeats {
-    function seatIndex(address account) external view returns (uint8 indexPlusOne);
-}
-
-interface IGrantorOwnership {
-    function acceptOwnership() external;
-}
 
 // In most cases, I found it better to leave constants at their default size of `uint256`
 // because then it's easier for the engineer to read visually.  When the size constraints
@@ -103,15 +96,14 @@ contract GeniusDao is ReentrancyGuard {
         if (constitution == address(0) || devOverride == address(0) || geniV2 == address(0)) {
             revert ENullAddress();
         }
-        _constitution = IConstitutionSeats(constitution);
+        _constitution = IGrantor(constitution);
         _geniV2 = geniV2;
         _globals.nativeExecLock = 1;
 
-        // v0.1 defaultsfee structure:
-        // - 5,000,000 GENI (v2)
-        // - 0.02 ETH
-        _proposalFeeByToken[geniV2] = 5_000_000e9;
-        _proposalFeeByToken[address(0)] = 0.02 ether;
+        // Bootstrap: native ETH so the first proposals can run without a mock GENI token.
+        // Governance switches currency via onlySelf `daoSetProposalFee(token, amount)` (e.g. GENI or USDC).
+        _proposalFeeToken = address(0);
+        _proposalFeeAmount = uint96(0.02 ether);
     }
 
     /***************************************************************************
@@ -136,7 +128,7 @@ contract GeniusDao is ReentrancyGuard {
 // Let's be clear that the constitution is actually the code that never changes.
 // It's not that the seats are unchangeable; it's that the interface between the
 // grantors of the world and genius's code is immutable.
-    IConstitutionSeats internal immutable _constitution;
+    IGrantor internal immutable _constitution;
 
     /***************************************************************************
      *
@@ -154,12 +146,10 @@ contract GeniusDao is ReentrancyGuard {
 // the log itself?
 
 // Isn't the Block log timestamp only “emitted at” time.  it does not encode both lifecycle constraints.
-
-        uint40 txExpiresOn,
         uint40 expiresOn,
         uint8 actionCount,
         uint8 linkProtocol,
-        bytes32 metadataHash
+        bytes32 url
     );
 
     event ProposalYesVote(uint256 indexed proposalId, address indexed voter, uint16 approvals);
@@ -178,8 +168,8 @@ contract GeniusDao is ReentrancyGuard {
         uint96 value
     );
 
-    event ProposalFeeChanged(uint96 fee);
-    event ProposalFeeTokenChanged(address indexed token, uint96 fee);
+    /// @notice Emitted when governance sets the single active proposal fee currency and amount.
+    event ProposalFeeConfigChanged(address indexed token, uint96 amount);
     event EmergencyDisbursed(address indexed token, address indexed to, uint256 amount);
 
 // Let's call this "Accepted", like "GrantorWhitelistAccepted", implying that
@@ -200,9 +190,6 @@ contract GeniusDao is ReentrancyGuard {
         uint40 eta;           // 5
 // ^-- this is already slot 1, with 16 bits remaining.
 
-// if we know when it's created, do we need to save when it expires?
-        uint40 txExpiresOn;   // 5
-
 // just pack these into a single uint8
         // packed: [7..5]=proposalType, [4]=executed, [3..0]=actionCount
         uint8 meta;           // 1
@@ -221,7 +208,7 @@ contract GeniusDao is ReentrancyGuard {
 
 
 // Slot 3+: proposal metadata for UI display/discovery.
-        bytes32 metadataHash;
+        bytes32 url;
     }
 
     /***************************************************************************
@@ -235,10 +222,8 @@ contract GeniusDao is ReentrancyGuard {
     //These don't consume storage only used for calldata
     struct ProposeInput {
         uint40 eta;
-        uint40 txExpiresOn;
         uint8 linkProtocol;
-        bytes32 metadataHash;
-        address feeToken;
+        bytes32 url;
         uint256 proposalType;
     }
 
@@ -262,11 +247,15 @@ contract GeniusDao is ReentrancyGuard {
 
 // why not just make the variable public from the start?  my memory may be rusty
     function fee() public view returns (uint96 fee_) {
-        fee_ = _proposalFeeByToken[address(0)];
+        fee_ = _proposalFeeAmount;
+    }
+
+    function feeToken() public view returns (address token_) {
+        token_ = _proposalFeeToken;
     }
 
     function feeByToken(address token) public view returns (uint96 fee_) {
-        fee_ = _proposalFeeByToken[token];
+        fee_ = (token == _proposalFeeToken) ? _proposalFeeAmount : 0;
     }
 
     /***************************************************************************
@@ -289,8 +278,9 @@ contract GeniusDao is ReentrancyGuard {
     // proposalId => actionIndex => actionHash
     mapping(uint256 => mapping(uint256 => bytes32)) internal _actionHash;
 
-    // proposal fee by token (address(0) = native token)
-    mapping(address => uint96) internal _proposalFeeByToken;
+    // Active proposal fee model (single currency at a time).
+    address internal _proposalFeeToken;
+    uint96 internal _proposalFeeAmount;
 
     // target => 0(non-existent), 1(false), 2(true)
     mapping(address => uint8) internal _nativeTargetAllowed;
@@ -543,14 +533,28 @@ contract GeniusDao is ReentrancyGuard {
         if (input.proposalType != PROPOSAL_TYPE_NATIVE && input.proposalType != PROPOSAL_TYPE_GRANTOR) {
             revert EBadProposalType();
         }
-        uint96 feeRequired = _proposalFeeByToken[input.feeToken];
-        if (feeRequired == 0) revert EUnsupportedFeeToken();
-        if (input.feeToken == address(0)) {
+        address payToken = _proposalFeeToken;
+        uint96 feeRequired = _proposalFeeAmount;
+        if (payToken == address(0)) {
             if (msg.value < feeRequired) revert EInsufficientProposalFee();
         } 
         else {
-            if (msg.value != 0) revert EUnexpectedNativeValue();
-            IERC20(input.feeToken).safeTransferFrom(msg.sender, address(this), feeRequired);
+            if (payToken == _geniV2) {
+                if (
+                    !IGeniusV2(_geniV2).transferFrom(
+                        msg.sender,
+                        address(this),
+                        feeRequired
+                    )
+                ) revert EBadValue();
+            } 
+            else {
+                IERC20(payToken).safeTransferFrom(
+                    msg.sender, 
+                    address(this), 
+                    feeRequired
+                );
+            }
         }
 
         unchecked {
@@ -560,17 +564,15 @@ contract GeniusDao is ReentrancyGuard {
         uint40 now40 = uint40(block.timestamp);
         uint40 expiresOn = now40 + uint40(GRANTOR_PROPOSAL_LIFETIME);
         if (input.eta != 0 && input.eta > expiresOn) revert EBadValue();
-        if (input.txExpiresOn != 0 && input.txExpiresOn < input.eta) revert EBadValue();
 
         ProposalCore storage p = _proposals[proposalId];
         p.proposer = msg.sender;
         p.createdOn = now40;
         p.eta = input.eta;
-        p.txExpiresOn = input.txExpiresOn;
         p.meta = _packMeta(len, input.proposalType, false);
         p.approvals = 0;
         p.linkProtocol = input.linkProtocol;
-        p.metadataHash = input.metadataHash;
+        p.url = input.url;
 
         _storeActionHashes(proposalId, actionHashes, len);
 
@@ -578,11 +580,10 @@ contract GeniusDao is ReentrancyGuard {
             proposalId,
             msg.sender,
             input.eta,
-            input.txExpiresOn,
             expiresOn,
             uint8(len),
             input.linkProtocol,
-            input.metadataHash
+            input.url
         );
     }
 
@@ -670,7 +671,6 @@ contract GeniusDao is ReentrancyGuard {
         uint40 now40 = uint40(block.timestamp);
         if (now40 > p.createdOn + uint40(GRANTOR_PROPOSAL_LIFETIME + GRANTOR_EXECUTION_GRACE)) revert EExpired();
         if (p.eta != 0 && now40 < p.eta) revert ENotExecutableYet();
-        if (p.txExpiresOn != 0 && now40 > p.txExpiresOn) revert EExpired();
 
         uint256 len = targets.length;
         if (len != _actionCount(meta)) revert EBadArrayLength();
@@ -716,14 +716,17 @@ contract GeniusDao is ReentrancyGuard {
         emit ProposalExecuted(proposalId);
     }
 
-    function daoSetProposalFee(uint96 newFee) external onlySelf {
-        _proposalFeeByToken[address(0)] = newFee;
-        emit ProposalFeeChanged(newFee);
-    }
-
-    function daoSetProposalFeeToken(address token, uint96 newFee) external onlySelf {
-        _proposalFeeByToken[token] = newFee;
-        emit ProposalFeeTokenChanged(token, newFee);
+    /**
+     * @notice Set the only active proposal fee token and amount (governance via executed proposal).
+     * @param token address(0) = native ETH; otherwise ERC20 (or GENI v2 at `_geniV2`).
+     * @param amount Fee in token native units (wei for ETH, token decimals for ERC20).
+     */
+    function daoSetProposalFee(address token, uint96 amount) external onlySelf {
+        if (amount == 0) revert EBadValue();
+        if (token != address(0) && token.code.length == 0) revert EBadValue();
+        _proposalFeeToken = token;
+        _proposalFeeAmount = amount;
+        emit ProposalFeeConfigChanged(token, amount);
     }
 
     function daoSetNativeTargetAllowed(
@@ -757,7 +760,7 @@ contract GeniusDao is ReentrancyGuard {
 
     function daoAcceptGrantorOwnership(address grantor) external onlySelf {
         if (grantor == address(0)) revert ENullAddress();
-        IGrantorOwnership(grantor).acceptOwnership();
+        IGrantor(grantor).acceptOwnership();
     }
 
     /***************************************************************************

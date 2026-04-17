@@ -4,13 +4,23 @@
  * Security: generates 16 random seat wallets and writes their private keys to disk.
  * Add `scripts/generated/` to `.gitignore` and never commit real keys.
  *
+ * GeniusDao fee model (single active currency):
+ * - At deploy, GeniusDao bootstraps with native ETH proposal fees (`feeToken() == 0x0`, `fee()` in wei).
+ * - Governance later switches currency by executing a GRANTOR proposal that self-calls
+ *   `daoSetProposalFee(token, amount)` (e.g. GENI v2, then USDC). All subsequent `propose` calls
+ *   use that token + amount only; proposers do not pass a fee token in calldata.
+ *
  * Workflow:
- * 1. Generate 16 wallets → save private keys to scripts/generated/grantor-seat-keys.json
+ * 1. Generate 16 wallets → save private keys under scripts/generated/
  * 2. Deploy Grantor(seats) — initial owner = deployer
- * 3. Deploy GeniusDao(Grantor, devOverridePlaceholder, geniV2Placeholder)
+ * 3. Deploy GeniusDao(Grantor, devOverrideNonZero, geniV2Address)
+ *    - `devOverride` must be non-zero per constructor but is unused in current GeniusDao bytecode.
+ *    - `geniV2` must be non-zero; use real GENI v2 on testnets (`process.env.GENI_V2`); local default is deployer.
  * 4. Grantor.electNewGrantor(GeniusDao)
  * 5. Create and pass a GRANTOR-type proposal that executes daoAcceptGrantorOwnership(Grantor)
- * 6. Execute proposal → GeniusDao becomes Grantor owner; privileged Genius calls go via Grantor.callGenius(...)
+ *    - Pay proposal fee: if bootstrap fee is ETH, send `value: fee`; if you change GeniusDao to ERC20 fees first,
+ *      extend this script (approve + propose with value 0).
+ * 6. Execute proposal → GeniusDao becomes Grantor owner; Genius `onlyGrantor` paths go via Grantor.callGenius(...)
  */
 
 const fs = require("fs");
@@ -80,19 +90,30 @@ async function main() {
   await grantor.deployed();
   console.log("Grantor:", grantor.address, "owner:", await grantor.owner());
 
-  // Placeholders: must be non-zero for GeniusDao constructor (GENI v2 + unused dev slot).
+  // Constructor requires non-zero addresses; dev slot is unused in current GeniusDao.
   const devOverridePlaceholder = deployer.address;
-  const geniV2Placeholder = deployer.address;
+  const geniV2Address =
+    process.env.GENI_V2 && process.env.GENI_V2.length > 0
+      ? process.env.GENI_V2
+      : deployer.address;
 
   // --- 2. GeniusDao ---
   const GeniusDao = await ethers.getContractFactory("GeniusDao");
   const geniusDao = await GeniusDao.deploy(
     grantor.address,
     devOverridePlaceholder,
-    geniV2Placeholder
+    geniV2Address
   );
   await geniusDao.deployed();
   console.log("GeniusDao:", geniusDao.address);
+  const activeFeeToken = await geniusDao.feeToken();
+  const activeFeeAmount = await geniusDao.fee();
+  console.log(
+    "GeniusDao proposal fee (bootstrap): token",
+    activeFeeToken,
+    "amount",
+    activeFeeAmount.toString()
+  );
 
   // --- 3. Elect DAO as pending Grantor owner ---
   const electTx = await grantor.electNewGrantor(geniusDao.address);
@@ -105,17 +126,24 @@ async function main() {
   ]);
   const actionHash = await geniusDao.hashAction(geniusDao.address, 0, acceptCalldata);
 
-  const proposeFee = await geniusDao.fee();
   const proposeInput = {
     eta: 0,
-    txExpiresOn: 0,
     linkProtocol: 0,
-    metadataHash: ethers.constants.HashZero,
-    feeToken: ethers.constants.AddressZero,
+    url: ethers.constants.HashZero,
     proposalType: PROPOSAL_TYPE_GRANTOR,
   };
 
-  const proposeTx = await geniusDao.propose([actionHash], proposeInput, { value: proposeFee });
+  let proposeOpts = {};
+  if (activeFeeToken === ethers.constants.AddressZero) {
+    proposeOpts = { value: activeFeeAmount };
+  } else {
+    throw new Error(
+      "This script expects GeniusDao bootstrap fee in ETH (feeToken == 0x0). " +
+        "For ERC20 fees, approve GeniusDao and call propose with value 0, or change bootstrap in the contract."
+    );
+  }
+
+  const proposeTx = await geniusDao.propose([actionHash], proposeInput, proposeOpts);
   const proposeRc = await proposeTx.wait();
   let proposalId = null;
   for (const log of proposeRc.logs) {
