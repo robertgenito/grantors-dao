@@ -46,6 +46,7 @@ error ENullAddress();
 error EUnauthorized();
 error ENotPendingOwner();
 error ECallFailed();
+error ENotOwner();
 
 /*******************************************************************************
  *
@@ -221,9 +222,10 @@ contract Grantor {
      **************************************************************************/
 
     modifier onlyOwner() {
-        if (msg.sender == owner) {
-            _;
+        if (msg.sender != owner) {
+            revert ENotOwner();
         }
+        _;
     }
 
     modifier onlyWhitelistedGrantorSeat() {
@@ -260,10 +262,10 @@ contract Grantor {
     function acceptOwnership() external {
         address nominated = pendingOwner;
         if (msg.sender != nominated) revert ENotPendingOwner();
-        // address previousOwner = owner;
+        address previousOwner = owner;
         owner = nominated;
         pendingOwner = address(0);
-        emit OwnershipTransferred(owner, nominated);
+        emit OwnershipTransferred(previousOwner, nominated);
     }
 
     // The Grantor contract is the single "house" that executes calls into Genius contracts.

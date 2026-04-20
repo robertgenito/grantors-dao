@@ -482,8 +482,10 @@ contract GeniusDao is ReentrancyGuard {
         bytes32 expected = _actionHash[proposalId][actionIndex];
         if (expected != _hashAction(target, value, data)) revert EBadValue();
 
+        bytes memory callRet;
         if (proposalType == PROPOSAL_TYPE_NATIVE) {
             if (_nativeTargetAllowed[target] != 2) revert ENativeTargetNotAllowed();
+            callRet = _constitution.callGenius(target, value, data);
         } 
         else {
 // Anyone from the public should be allowed to execute anything that has reached
@@ -492,13 +494,13 @@ contract GeniusDao is ReentrancyGuard {
 // execute() is external and not seat-restricted.
             // Grantor proposals execute only DAO-owned actions.
             if (target != address(this)) revert EGrantorTargetOnlySelf();
-        }
-
-        (bool ok, bytes memory callRet) = target.call{value: uint256(value)}(data);
-        if (!ok) {
-            assembly {
-                revert(add(callRet, 0x20), mload(callRet))
+            (bool ok, bytes memory directRet) = target.call{value: uint256(value)}(data);
+            if (!ok) {
+                assembly {
+                    revert(add(directRet, 0x20), mload(directRet))
+                }
             }
+            callRet = directRet;
         }
 
         emit ProposalActionExecuted(
