@@ -45,6 +45,7 @@ error ESeatNotActive();
 error EInsufficientProposalFee();
 error EUnexpectedNativeValue();
 error EReentrant();
+error EUnauthorizedDirector();
 
 /*******************************************************************************
  *
@@ -97,6 +98,7 @@ contract GeniusDao is ReentrancyGuard {
             revert ENullAddress();
         }
         _constitution = IGrantor(constitution);
+        _director = devOverride;
         _geniV2 = geniV2;
         _globals.nativeExecLock = 1;
 
@@ -171,6 +173,11 @@ contract GeniusDao is ReentrancyGuard {
     /// @notice Emitted when governance sets the single active proposal fee currency and amount.
     event ProposalFeeConfigChanged(address indexed token, uint96 amount);
     event EmergencyDisbursed(address indexed token, address indexed to, uint256 amount);
+    event EmergencyDaoReplacementRequested(
+        address indexed requester,
+        address indexed grantor,
+        address indexed newDao
+    );
 
 // Let's call this "Accepted", like "GrantorWhitelistAccepted", implying that
 // the grantor's wallet account has accepted their whitelist invitation.
@@ -269,6 +276,7 @@ contract GeniusDao is ReentrancyGuard {
     // Packed global scalar state.
     GlobalState internal _globals;
     address internal immutable _geniV2;
+    address internal immutable _director;
 
 // Why not make it public?  that way, the UI can freely grab proposals without
 // the cost of implementing access or functions.
@@ -763,6 +771,21 @@ contract GeniusDao is ReentrancyGuard {
     function daoAcceptGrantorOwnership(address grantor) external onlySelf {
         if (grantor == address(0)) revert ENullAddress();
         IGrantor(grantor).acceptOwnership();
+    }
+
+    /**
+     * @notice Director-only emergency path to nominate a replacement DAO in Grantor.
+     * @dev This bypasses voting. The nominated DAO must still call Grantor.acceptOwnership().
+     */
+    function directorElectEmergencyDao(address newDao, bool emitLog) external {
+        if (msg.sender != _director) revert EUnauthorizedDirector();
+        if (newDao == address(0)) revert ENullAddress();
+
+        _constitution.electNewGrantor(newDao);
+
+        if (emitLog) {
+            emit EmergencyDaoReplacementRequested(msg.sender, address(_constitution), newDao);
+        }
     }
 
     /***************************************************************************

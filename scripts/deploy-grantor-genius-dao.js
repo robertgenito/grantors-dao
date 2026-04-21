@@ -13,8 +13,8 @@
  * Workflow:
  * 1. Generate 16 wallets → save private keys under scripts/generated/
  * 2. Deploy Grantor(seats) — initial owner = deployer
- * 3. Deploy GeniusDao(Grantor, devOverrideNonZero, geniV2Address)
- *    - `devOverride` must be non-zero per constructor but is unused in current GeniusDao bytecode.
+ * 3. Deploy GeniusDao(Grantor, directorAddress, geniV2Address)
+ *    - `directorAddress` is set to generated seat address[0] for this workflow.
  *    - `geniV2` must be non-zero; use real GENI v2 on testnets (`process.env.GENI_V2`); local default is deployer.
  * 4. Grantor.electNewGrantor(GeniusDao)
  * 5. Create and pass a GRANTOR-type proposal that executes daoAcceptGrantorOwnership(Grantor)
@@ -90,8 +90,9 @@ async function main() {
   await grantor.deployed();
   console.log("Grantor:", grantor.address, "owner:", await grantor.owner());
 
-  // Constructor requires non-zero addresses; dev slot is unused in current GeniusDao.
-  const devOverridePlaceholder = deployer.address;
+  // Constructor requires non-zero addresses.
+  // Director is one of the generated seats for this project: seat address[0].
+  const directorAddress = seatAddresses[0];
   const geniV2Address =
     process.env.GENI_V2 && process.env.GENI_V2.length > 0
       ? process.env.GENI_V2
@@ -101,7 +102,7 @@ async function main() {
   const GeniusDao = await ethers.getContractFactory("GeniusDao");
   const geniusDao = await GeniusDao.deploy(
     grantor.address,
-    devOverridePlaceholder,
+    directorAddress,
     geniV2Address
   );
   await geniusDao.deployed();

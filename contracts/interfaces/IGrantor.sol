@@ -3,6 +3,7 @@ pragma solidity 0.8.26;
 
 interface IGrantor {
     function acceptOwnership() external;
+    function electNewGrantor(address newOwner) external;
     function callGenius(address target, uint96 value, bytes calldata data)
         external
         payable
