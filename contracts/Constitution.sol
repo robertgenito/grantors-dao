@@ -2,6 +2,7 @@
 // Genius is NOT LICENSED FOR COPYING.
 // Genius (C) 2026. All Rights Reserved.
 pragma solidity 0.8.26;
+import "./AllContracts.sol";
 
 // Constitution -> rename to Grantors.sol
 //      * This file will be launched with the Genius contracts.
@@ -47,12 +48,35 @@ error EUnauthorized();
 error ENotPendingOwner();
 error ECallFailed();
 error ENotOwner();
+error EBadCalldata();
+error EBadSelector();
 
 /*******************************************************************************
  *
  * PRIVATE INTERFACES SPECIFIC TO THIS CONTRACT
  *
  ******************************************************************************/
+interface IGeniusToken {
+    function changeTreasury(address _treasury) external;
+    function changeGrantor(address _newGrantor) external;
+}
+
+interface IVault {
+    function beginCreditIssuance(address token, uint256 initRate) external;
+    function pauseCreditIssuance(address token) external;
+    function resumeCreditIssuance(address token) external;
+    function purgeVault(address beneficiary, uint256 index) external;
+}
+
+interface INftController {
+    function newEdition(address _newEdition, uint256 reserved) external;
+    function expelEdition(address _edition) external;
+    function setReserved(address _edition, uint256 _reserved) external;
+}
+
+interface INftRoyaltyReceiver {
+    function setBurnCosts(uint128 _weeklyAmount, uint128 _monthlyAmount) external;
+}
 
 /*******************************************************************************
  *
@@ -73,7 +97,7 @@ uint16 constant GRANTOR_EXECUTE_THRESHOLD = 10;
  *
  ******************************************************************************/
 
-contract Grantor {
+contract Grantor is AllContracts {
     /***************************************************************************
      *
      * Contract Construction: will always go at the top of the contract!
@@ -270,7 +294,7 @@ contract Grantor {
 
     // The Grantor contract is the single "house" that executes calls into Genius contracts.
     // Owner is expected to be GeniusDao once ownership is accepted.
-    function callGenius(address target, uint96 value, bytes calldata data)
+    function callAnyContract(address target, uint96 value, bytes calldata data)
         external
         payable
         onlyOwner
@@ -285,6 +309,66 @@ contract Grantor {
 
         emit GeniusCallExecuted(target, value, bytes4(data));
         ret = callRet;
+    }
+
+    function callGeniusToken(bytes calldata data)
+        external
+        onlyOwner
+        returns (bytes memory ret)
+    {
+        bytes4 selector = _selector(data);
+        if (
+            selector != IGeniusToken.changeTreasury.selector &&
+            selector != IGeniusToken.changeGrantor.selector
+        ) {
+            revert EBadSelector();
+        }
+        ret = _callTarget(GENIUS_CONTRACT_TOKEN, data, 0, selector);
+    }
+
+    function callVault(bytes calldata data)
+        external
+        onlyOwner
+        returns (bytes memory ret)
+    {
+        bytes4 selector = _selector(data);
+        if (
+            selector != IVault.beginCreditIssuance.selector &&
+            selector != IVault.pauseCreditIssuance.selector &&
+            selector != IVault.resumeCreditIssuance.selector &&
+            selector != IVault.purgeVault.selector
+        ) {
+            revert EBadSelector();
+        }
+        ret = _callTarget(GENIUS_CONTRACT_VAULT, data, 0, selector);
+    }
+
+    function callNftController(bytes calldata data)
+        external
+        onlyOwner
+        returns (bytes memory ret)
+    {
+        bytes4 selector = _selector(data);
+        if (
+            selector != INftController.newEdition.selector &&
+            selector != INftController.expelEdition.selector &&
+            selector != INftController.setReserved.selector
+        ) {
+            revert EBadSelector();
+        }
+        ret = _callTarget(GENIUS_CONTRACT_NFT_CONTROLLER, data, 0, selector);
+    }
+
+    function callNftRoyalties(bytes calldata data)
+        external
+        onlyOwner
+        returns (bytes memory ret)
+    {
+        bytes4 selector = _selector(data);
+        if (selector != INftRoyaltyReceiver.setBurnCosts.selector) {
+            revert EBadSelector();
+        }
+        ret = _callTarget(GENIUS_CONTRACT_NFT_ROYALTIES, data, 0, selector);
     }
 
     /***************************************************************************
@@ -349,6 +433,24 @@ contract Grantor {
      *
      *
      **************************************************************************/
+    function _callTarget(
+        address target,
+        bytes calldata data,
+        uint96 value,
+        bytes4 selector
+    ) internal returns (bytes memory ret) {
+        (bool ok, bytes memory callRet) = target.call{value: uint256(value)}(data);
+        if (!ok) revert ECallFailed();
+        emit GeniusCallExecuted(target, value, selector);
+        ret = callRet;
+    }
+
+    function _selector(bytes calldata data) internal pure returns (bytes4 s) {
+        if (data.length < 4) revert EBadCalldata();
+        assembly {
+            s := shr(224, calldataload(data.offset))
+        }
+    }
 
     /***************************************************************************
      *

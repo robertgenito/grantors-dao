@@ -42,7 +42,11 @@ function ensureDir(dir) {
 
 async function main() {
   const { ethers } = hre;
-  const [deployer] = await ethers.getSigners();
+  const signers = await ethers.getSigners();
+  if (signers.length < 2) {
+    throw new Error("Expected at least 2 hardhat signers; account[1] is required as deployer.");
+  }
+  const deployer = signers[1];
 
   const generatedDir = path.join(__dirname, "generated");
   const keysPath = path.join(
@@ -85,10 +89,10 @@ async function main() {
   }
 
   // --- 1. Grantor ---
-  const Grantor = await ethers.getContractFactory("Grantor");
-  const grantor = await Grantor.deploy(seatAddresses);
-  await grantor.deployed();
-  console.log("Grantor:", grantor.address, "owner:", await grantor.owner());
+  const Constitution = await ethers.getContractFactory("Constitution", deployer);
+  const constitution = await Constitution.deploy(seatAddresses);
+  await constitution.deployed();
+  console.log("Constitution:", constitution.address, "owner:", await constitution.owner());
 
   // Constructor requires non-zero addresses.
   // Director is one of the generated seats for this project: seat address[0].
@@ -99,7 +103,7 @@ async function main() {
       : deployer.address;
 
   // --- 2. GeniusDao ---
-  const GeniusDao = await ethers.getContractFactory("GeniusDao");
+  const GeniusDao = await ethers.getContractFactory("GeniusDao", deployer);
   const geniusDao = await GeniusDao.deploy(
     grantor.address,
     directorAddress,
