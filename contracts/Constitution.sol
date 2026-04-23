@@ -104,6 +104,17 @@ contract Grantor is AllContracts {
      *
      **************************************************************************/
     constructor(address[GRANTOR_SEAT_COUNT] memory seatsInit) {
+        // emit a log that shows who the first owner is
+        // There should be a struct that gets passed to the constructor that
+        // shows who the grantor is and how much $$ amount of liquidity they get access to
+        // And when they can access that liquidity
+
+        // eg
+//         struct {
+// address account;
+// uint88 liquidityAllowanceUsd;
+// uint8 firstLiquidityDay;
+// }
         owner = msg.sender;
 
         // Storage strategy: 0 = non-existent, 1 = false, 2 = true.
@@ -278,6 +289,7 @@ contract Grantor is AllContracts {
     // 1) current owner nominates a new owner (contract or account),
     // 2) nominated owner calls acceptOwnership.
     function electNewGrantor(address newOwner) external onlyOwner {
+        // Lets have these logs match the function name
         if (newOwner == address(0)) revert ENullAddress();
         pendingOwner = newOwner;
         emit OwnershipTransferStarted(owner, newOwner);
@@ -289,7 +301,7 @@ contract Grantor is AllContracts {
         address previousOwner = owner;
         owner = nominated;
         pendingOwner = address(0);
-        emit OwnershipTransferred(previousOwner, nominated);
+        emit OwnershipTransferred(previousOwner, nominated); //lET'S CALL IT NEW OWNER
     }
 
     // The Grantor contract is the single "house" that executes calls into Genius contracts.

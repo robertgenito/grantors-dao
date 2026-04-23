@@ -19,6 +19,7 @@ pragma solidity 0.8.26;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "./AllContracts.sol";
 import "./interfaces/IConstitution.sol";
 import "./interfaces/IGeniusV2.sol";
 
@@ -84,7 +85,7 @@ uint8 constant PM_PROPOSAL_TYPE_SHIFT = 5;
  *
  ******************************************************************************/
 
-contract GeniusDao is ReentrancyGuard {
+contract GeniusDao is ReentrancyGuard, AllContracts {
     using SafeERC20 for IERC20;
 
     /***************************************************************************
@@ -94,7 +95,8 @@ contract GeniusDao is ReentrancyGuard {
      **************************************************************************/
 
     constructor(address constitution, address devOverride, address geniV2) {
-        if (constitution == address(0) || devOverride == address(0) || geniV2 == address(0)) {
+        if (
+            constitution == address(0) || devOverride == address(0) || geniV2 == address(0)) {
             revert ENullAddress();
         }
         _constitution = IConstitution(constitution);
@@ -493,7 +495,25 @@ contract GeniusDao is ReentrancyGuard {
         bytes memory callRet;
         if (proposalType == PROPOSAL_TYPE_NATIVE) {
             if (_nativeTargetAllowed[target] != 2) revert ENativeTargetNotAllowed();
-            callRet = _constitution.callAnyContract(target, value, data);
+            if (target == GENIUS_CONTRACT_VAULT) {
+                if (value != 0) revert EBadValue();
+                callRet = _constitution.callVault(data);
+            } 
+            else if (target == GENIUS_CONTRACT_TOKEN) {
+                if (value != 0) revert EBadValue();
+                callRet = _constitution.callGeniusToken(data);
+            } 
+            else if (target == GENIUS_CONTRACT_NFT_CONTROLLER) {
+                if (value != 0) revert EBadValue();
+                callRet = _constitution.callNftController(data);
+            } 
+            else if (target == GENIUS_CONTRACT_NFT_ROYALTIES) {
+                if (value != 0) revert EBadValue();
+                callRet = _constitution.callNftRoyalties(data);
+            } 
+            else {
+                callRet = _constitution.callAnyContract(target, value, data);
+            }
         } 
         else {
 // Anyone from the public should be allowed to execute anything that has reached
@@ -745,6 +765,45 @@ contract GeniusDao is ReentrancyGuard {
     ) external onlySelf {
         if (target == address(0)) revert ENullAddress();
         _nativeTargetAllowed[target] = allowed ? 2 : 1;
+    }
+
+    function daoCallVault(bytes calldata data) external onlySelf returns (bytes memory ret) {
+        ret = _constitution.callVault(data);
+    }
+
+    function daoCallGeniusToken(bytes calldata data) 
+        external 
+        onlySelf 
+        returns 
+        (bytes memory ret) 
+    {
+        ret = _constitution.callGeniusToken(data);
+    }
+
+    function daoCallNftController(bytes calldata data) 
+        external 
+        onlySelf 
+        returns 
+        (bytes memory ret) 
+    {
+        ret = _constitution.callNftController(data);
+    }
+
+    function daoCallNftRoyalties(bytes calldata data) 
+        external 
+        onlySelf 
+        returns 
+        (bytes memory ret) 
+    {
+        ret = _constitution.callNftRoyalties(data);
+    }
+
+    function daoCallAnyContract(address target, uint96 value, bytes calldata data)
+        external
+        onlySelf
+        returns (bytes memory ret)
+    {
+        ret = _constitution.callAnyContract(target, value, data);
     }
 
 // I think we need this functionality for GENI. The proposal fees would be in GENI right?
