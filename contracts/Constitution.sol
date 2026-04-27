@@ -97,13 +97,13 @@ uint16 constant GRANTOR_EXECUTE_THRESHOLD = 10;
  *
  ******************************************************************************/
 
-contract Grantor is AllContracts {
+contract Constitution is AllContracts {
     /***************************************************************************
      *
      * Contract Construction: will always go at the top of the contract!
      *
      **************************************************************************/
-    constructor(address[GRANTOR_SEAT_COUNT] memory seatsInit) {
+    constructor() {
         // emit a log that shows who the first owner is
         // There should be a struct that gets passed to the constructor that
         // shows who the grantor is and how much $$ amount of liquidity they get access to
@@ -117,19 +117,6 @@ contract Grantor is AllContracts {
 // }
         owner = msg.sender;
 
-        // Storage strategy: 0 = non-existent, 1 = false, 2 = true.
-        // seatIndexPlusOne uses 0 as non-seat sentinel.
-        uint256 i;
-        do {
-            address s = seatsInit[i];
-            if (s == address(0)) revert ENullAddress();
-            if (_whitelistSeatIndexPlusOne[s] != 0) revert EExists();
-            _whitelistSeats[i] = s;
-            unchecked {
-                _whitelistSeatIndexPlusOne[s] = uint8(i + 1);
-                ++i;
-            }
-        } while (i != GRANTOR_SEAT_COUNT);
     }
 
     /***************************************************************************
@@ -197,18 +184,6 @@ contract Grantor is AllContracts {
 
     // When the Owner (the DAO Contract) -- GeniusDao?
 
-    function seats(uint256 index) external view returns (address seat) {
-        seat = _whitelistSeats[index];
-    }
-
-    function seatIndex(address account) 
-        external 
-        view 
-        returns (uint8 indexPlusOne) 
-    {
-        indexPlusOne = _whitelistSeatIndexPlusOne[account];
-    }
-
     function emergencyCount(address newDaoContract) 
         external 
         view 
@@ -230,8 +205,8 @@ contract Grantor is AllContracts {
 // This first version will be super simple.  It's important to get terminology as accurate as possible!
 // OR, maybe these "seats" are whitelistSeats?  (accounts that can always have a seat, i.e. they're
 // whitelisted..)
-    address[GRANTOR_SEAT_COUNT] internal _whitelistSeats;
-    mapping(address => uint8) internal _whitelistSeatIndexPlusOne;
+    // address[GRANTOR_SEAT_COUNT] internal _whitelistSeats;
+    // mapping(address => uint8) internal _whitelistSeatIndexPlusOne;
 
     // newGrantor => packed [bitmap:16 | count:8]
     mapping(address => uint256) internal _emergency;
@@ -259,13 +234,6 @@ contract Grantor is AllContracts {
     modifier onlyOwner() {
         if (msg.sender != owner) {
             revert ENotOwner();
-        }
-        _;
-    }
-
-    modifier onlyWhitelistedGrantorSeat() {
-        if (_whitelistSeatIndexPlusOne[msg.sender] == 0) {
-            revert EBadSeat();
         }
         _;
     }
@@ -405,7 +373,7 @@ contract Grantor is AllContracts {
      */
     function signalEmergencyUpgrade(address newDaoContract, bool emitLog)
         external
-        onlyWhitelistedGrantorSeat
+        onlyOwner
         returns (uint8 count)
     {
 // let's get terminology down: have the "grantor" be the person (the account)
@@ -413,17 +381,10 @@ contract Grantor is AllContracts {
 // I'm implying that a better name for "newGrantor" is "newDaoContract".
         if (newDaoContract == address(0)) revert ENullAddress();
 
-// isn't it still better on gas that everything in memory is uint256 ?
-        uint256 seat = uint256(_whitelistSeatIndexPlusOne[msg.sender]) - 1;
-        uint16 bit = uint16(1 << seat);
-
         uint256 packed = _emergency[newDaoContract];
-        uint16 bm = uint16(packed);
-        if ((bm & bit) != 0) revert EExists();
-
-        bm |= bit;
-        count = uint8(packed >> 16) + 1;
-        _emergency[newDaoContract] = uint256(bm) | (uint256(count) << 16);
+        if (packed != 0) revert EExists();
+        count = 1;
+        _emergency[newDaoContract] = uint256(count) << 16;
 
         if (emitLog) {
             emit EmergencySignaled(msg.sender, newDaoContract, count);

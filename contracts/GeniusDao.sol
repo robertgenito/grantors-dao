@@ -19,6 +19,7 @@ pragma solidity 0.8.26;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import "./AllContracts.sol";
 import "./interfaces/IConstitution.sol";
 import "./interfaces/IGeniusV2.sol";
@@ -47,6 +48,8 @@ error EInsufficientProposalFee();
 error EUnexpectedNativeValue();
 error EReentrant();
 error EUnauthorizedDirector();
+error EGrantorDataAlreadyAccepted();
+error EInvalidGrantorProof();
 
 /*******************************************************************************
  *
@@ -94,14 +97,19 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
      *
      **************************************************************************/
 
-    constructor(address constitution, address devOverride, address geniV2) {
+    constructor(address constitution, address devOverride, address geniV2, bytes32 grantorRoot_) {
         if (
-            constitution == address(0) || devOverride == address(0) || geniV2 == address(0)) {
+            constitution == address(0) ||
+            devOverride == address(0) ||
+            geniV2 == address(0) ||
+            grantorRoot_ == bytes32(0)
+        ) {
             revert ENullAddress();
         }
         _constitution = IConstitution(constitution);
         _director = devOverride;
         _geniV2 = geniV2;
+        _grantorRoot = grantorRoot_;
         _globals.nativeExecLock = 1;
 
         // Bootstrap: native ETH so the first proposals can run without a mock GENI token.
@@ -220,6 +228,12 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
         bytes32 url;
     }
 
+
+    struct GrantorData {
+        uint128 liquidityAllowance;
+        uint128 firstLiquidityDay;
+    }
+
     /***************************************************************************
      *
      *
@@ -267,6 +281,21 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
         fee_ = (token == _proposalFeeToken) ? _proposalFeeAmount : 0;
     }
 
+    function grantorRoot() external view returns (bytes32 root_) {
+        root_ = _grantorRoot;
+    }
+
+    function grantorData(address account)
+        external
+        view
+        returns (uint128 liquidityAllowance, uint128 firstLiquidityDay, bool accepted)
+    {
+        GrantorData storage d = _grantorData[account];
+        liquidityAllowance = d.liquidityAllowance;
+        firstLiquidityDay = d.firstLiquidityDay;
+        accepted = (_grantorDataAccepted[account] == 2);
+    }
+
     /***************************************************************************
      *
      *
@@ -279,6 +308,7 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
     GlobalState internal _globals;
     address internal immutable _geniV2;
     address internal immutable _director;
+    bytes32 internal immutable _grantorRoot;
 
 // Why not make it public?  that way, the UI can freely grab proposals without
 // the cost of implementing access or functions.
@@ -298,8 +328,11 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
     // seat => 0(non-existent), 1(false), 2(true)
     mapping(address => uint8) internal _seatActive;
 
-    // proposalId => seatIndexZeroBased => 0(non-existent),1(false),2(true)
-    mapping(uint256 => mapping(uint8 => uint8)) internal _votedBySeat;
+    // proposalId => voter => 0(non-existent),1(false),2(true)
+    mapping(uint256 => mapping(address => uint8)) internal _votedBySeat;
+    mapping(address => GrantorData) internal _grantorData;
+    // account => 0(non-existent), 1(false), 2(true)
+    mapping(address => uint8) internal _grantorDataAccepted;
 
     /***************************************************************************
      *
@@ -323,7 +356,7 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
 
 // For clarity and less ambiguity, let's rename this.
     modifier onlyGrantorSeat() {
-        if (_seatIndexPlusOne(msg.sender) == 0) {
+        if (_grantorDataAccepted[msg.sender] != 2) {
             revert EBadSeat();
         }
         _;
@@ -387,7 +420,7 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
     }
 
     function isSeatActive(address seat) external view returns (bool active) {
-        active = (_seatActive[seat] == 2);
+        active = (_grantorDataAccepted[seat] == 2);
     }
 
     function proposalTypeNative() external pure returns (uint256 t) {
@@ -406,6 +439,22 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
      *
      *
      **************************************************************************/
+    function acceptGrantorship(
+        bytes32[] calldata proof,
+        uint128 allowance,
+        uint128 firstDay
+    ) external {
+        if (_grantorDataAccepted[msg.sender] == 2) revert EGrantorDataAlreadyAccepted();
+
+        bytes32 leaf = keccak256(abi.encode(msg.sender, allowance, firstDay));
+        if (!MerkleProof.verify(proof, _grantorRoot, leaf)) revert EInvalidGrantorProof();
+
+        _grantorData[msg.sender] = GrantorData({
+            liquidityAllowance: allowance,
+            firstLiquidityDay: firstDay
+        });
+        _grantorDataAccepted[msg.sender] = 2;
+    }
 
     /***************************************************************************
      *
@@ -414,14 +463,6 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
      *
      *
      **************************************************************************/
-
-    function _seatIndexPlusOne(address account) internal view returns (uint8 i) {
-        i = _constitution.seatIndex(account);
-        if (i > GRANTOR_SEAT_COUNT) {
-            // Defensive: treat invalid registry results as non-seat.
-            i = 0;
-        }
-    }
 
     function hashAction(address target, uint96 value, bytes calldata data)
         external
@@ -624,20 +665,13 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
     function voteYes(
         uint256 proposalId
     ) external onlyGrantorSeat returns (uint16 approvals) {
-        if (_seatActive[msg.sender] != 2) revert ESeatNotActive();
-
         ProposalCore storage p = _proposals[proposalId];
         uint8 meta = p.meta;
         if (p.proposer == address(0)) revert ENotProposed();
         if (_executed(meta)) revert EExists();
         if (uint40(block.timestamp) > p.createdOn + uint40(GRANTOR_PROPOSAL_LIFETIME)) revert EExpired();
-
-        uint8 seat = _seatIndexPlusOne(msg.sender);
-        unchecked {
-            seat -= 1;
-        }
-        if (_votedBySeat[proposalId][seat] == 2) revert EExists();
-        _votedBySeat[proposalId][seat] = 2;
+        if (_votedBySeat[proposalId][msg.sender] == 2) revert EExists();
+        _votedBySeat[proposalId][msg.sender] = 2;
 
         approvals = p.approvals + 1;
         p.approvals = approvals;
@@ -648,20 +682,13 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
     function removeVote(
         uint256 proposalId
     ) external onlyGrantorSeat returns (uint16 approvals) {
-        if (_seatActive[msg.sender] != 2) revert ESeatNotActive();
-
         ProposalCore storage p = _proposals[proposalId];
         uint8 meta = p.meta;
         if (p.proposer == address(0)) revert ENotProposed();
         if (_executed(meta)) revert EExists();
         if (uint40(block.timestamp) > p.createdOn + uint40(GRANTOR_PROPOSAL_LIFETIME)) revert EExpired();
-
-        uint8 seat = _seatIndexPlusOne(msg.sender);
-        unchecked {
-            seat -= 1;
-        }
-        if (_votedBySeat[proposalId][seat] != 2) revert EBadValue();
-        _votedBySeat[proposalId][seat] = 1;
+        if (_votedBySeat[proposalId][msg.sender] != 2) revert EBadValue();
+        _votedBySeat[proposalId][msg.sender] = 1;
 
         approvals = p.approvals - 1;
         p.approvals = approvals;

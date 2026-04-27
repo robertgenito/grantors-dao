@@ -13,7 +13,7 @@
  * Workflow:
  * 1. Generate 16 wallets → save private keys under scripts/generated/
  * 2. Deploy Grantor(seats) — initial owner = deployer
- * 3. Deploy GeniusDao(Grantor, directorAddress, geniV2Address)
+ * 3. Deploy GeniusDao(Constitution, directorAddress, geniV2Address, grantorRoot)
  *    - `directorAddress` is set to generated seat address[0] for this workflow.
  *    - `geniV2` must be non-zero; use real GENI v2 on testnets (`process.env.GENI_V2`); local default is deployer.
  * 4. Grantor.electNewGrantor(GeniusDao)
@@ -90,7 +90,7 @@ async function main() {
 
   // --- 1. Grantor ---
   const Constitution = await ethers.getContractFactory("Constitution", deployer);
-  const constitution = await Constitution.deploy(seatAddresses);
+  const constitution = await Constitution.deploy();
   await constitution.deployed();
   console.log("Constitution:", constitution.address, "owner:", await constitution.owner());
 
@@ -101,13 +101,18 @@ async function main() {
     process.env.GENI_V2 && process.env.GENI_V2.length > 0
       ? process.env.GENI_V2
       : deployer.address;
+  const grantorRoot =
+    process.env.GRANTOR_ROOT && process.env.GRANTOR_ROOT.length > 0
+      ? process.env.GRANTOR_ROOT
+      : ethers.utils.keccak256(ethers.utils.toUtf8Bytes("LOCAL_GRANTOR_ROOT"));
 
   // --- 2. GeniusDao ---
   const GeniusDao = await ethers.getContractFactory("GeniusDao", deployer);
   const geniusDao = await GeniusDao.deploy(
-    grantor.address,
+    constitution.address,
     directorAddress,
-    geniV2Address
+    geniV2Address,
+    grantorRoot
   );
   await geniusDao.deployed();
   console.log("GeniusDao:", geniusDao.address);
@@ -121,13 +126,13 @@ async function main() {
   );
 
   // --- 3. Elect DAO as pending Grantor owner ---
-  const electTx = await grantor.electNewGrantor(geniusDao.address);
+  const electTx = await constitution.electNewGrantor(geniusDao.address);
   await electTx.wait();
-  console.log("Grantor.electNewGrantor(GeniusDao) done; pending:", await grantor.getPendingOwner());
+  console.log("Constitution.electNewGrantor(GeniusDao) done; pending:", await constitution.getPendingOwner());
 
-  // --- 4–5. Proposal: self-call daoAcceptGrantorOwnership(grantor) ---
+  // --- 4–5. Proposal: self-call daoAcceptGrantorOwnership(constitution) ---
   const acceptCalldata = geniusDao.interface.encodeFunctionData("daoAcceptGrantorOwnership", [
-    grantor.address,
+    constitution.address,
   ]);
   const actionHash = await geniusDao.hashAction(geniusDao.address, 0, acceptCalldata);
 
@@ -191,14 +196,14 @@ async function main() {
     await geniusDao.execute(proposalId, [geniusDao.address], [0], [acceptCalldata])
   ).wait();
 
-  const grantorOwner = await grantor.owner();
-  console.log("Grantor owner after acceptance:", grantorOwner);
-  if (grantorOwner.toLowerCase() !== geniusDao.address.toLowerCase()) {
-    throw new Error("Ownership transfer failed: Grantor owner is not GeniusDao");
+  const constitutionOwner = await constitution.owner();
+  console.log("Constitution owner after acceptance:", constitutionOwner);
+  if (constitutionOwner.toLowerCase() !== geniusDao.address.toLowerCase()) {
+    throw new Error("Ownership transfer failed: Constitution owner is not GeniusDao");
   }
 
   console.log("\nDeployment summary:");
-  console.log("  Grantor:   ", grantor.address);
+  console.log("  Constitution:", constitution.address);
   console.log("  GeniusDao: ", geniusDao.address);
   console.log("  Seat keys: ", keysPath);
 }

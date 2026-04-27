@@ -12,5 +12,4 @@ interface IConstitution {
         external
         payable
         returns (bytes memory ret);
-    function seatIndex(address account) external view returns (uint8 indexPlusOne);
 }
