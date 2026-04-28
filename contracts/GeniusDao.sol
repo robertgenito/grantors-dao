@@ -19,7 +19,7 @@ pragma solidity 0.8.26;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "./interfaces/IGrantor.sol";
+import "./interfaces/IConstitution.sol";
 import "./interfaces/IGeniusV2.sol";
 
 /*******************************************************************************
@@ -97,7 +97,7 @@ contract GeniusDao is ReentrancyGuard {
         if (constitution == address(0) || devOverride == address(0) || geniV2 == address(0)) {
             revert ENullAddress();
         }
-        _constitution = IGrantor(constitution);
+        _constitution = IConstitution(constitution);
         _director = devOverride;
         _geniV2 = geniV2;
         _globals.nativeExecLock = 1;
@@ -130,7 +130,7 @@ contract GeniusDao is ReentrancyGuard {
 // Let's be clear that the constitution is actually the code that never changes.
 // It's not that the seats are unchangeable; it's that the interface between the
 // grantors of the world and genius's code is immutable.
-    IGrantor internal immutable _constitution;
+    IConstitution internal immutable _constitution;
 
     /***************************************************************************
      *
@@ -493,7 +493,7 @@ contract GeniusDao is ReentrancyGuard {
         bytes memory callRet;
         if (proposalType == PROPOSAL_TYPE_NATIVE) {
             if (_nativeTargetAllowed[target] != 2) revert ENativeTargetNotAllowed();
-            callRet = _constitution.callGenius(target, value, data);
+            callRet = _constitution.callAnyContract(target, value, data);
         } 
         else {
 // Anyone from the public should be allowed to execute anything that has reached
@@ -770,7 +770,7 @@ contract GeniusDao is ReentrancyGuard {
 
     function daoAcceptGrantorOwnership(address grantor) external onlySelf {
         if (grantor == address(0)) revert ENullAddress();
-        IGrantor(grantor).acceptOwnership();
+        IConstitution(grantor).acceptOwnership();
     }
 
     /**
