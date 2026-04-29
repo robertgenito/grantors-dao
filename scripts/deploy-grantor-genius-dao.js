@@ -12,27 +12,42 @@
  *
  * Workflow:
  * 1. Generate 16 wallets → save private keys under scripts/generated/
- * 2. Deploy Grantor(seats) — initial owner = deployer
+ * 2. Build grantor Merkle root from (account, allowance, firstDay)
+ * 3. Deploy Constitution — initial owner = deployer
  * 3. Deploy GeniusDao(Constitution, directorAddress, geniV2Address, grantorRoot)
  *    - `directorAddress` is set to generated seat address[0] for this workflow.
  *    - `geniV2` must be non-zero; use real GENI v2 on testnets (`process.env.GENI_V2`); local default is deployer.
- * 4. Grantor.electNewGrantor(GeniusDao)
- * 5. Create and pass a GRANTOR-type proposal that executes daoAcceptGrantorOwnership(Grantor)
- *    - Pay proposal fee: if bootstrap fee is ETH, send `value: fee`; if you change GeniusDao to ERC20 fees first,
- *      extend this script (approve + propose with value 0).
- * 6. Execute proposal → GeniusDao becomes Grantor owner; Genius `onlyGrantor` paths go via Grantor.callGenius(...)
  */
 
 const fs = require("fs");
 const path = require("path");
 const hre = require("hardhat");
+const { MerkleTree } = require("merkletreejs");
+const keccak256 = require("keccak256");
 
 const SEAT_COUNT = 16;
 const PROPOSAL_TYPE_GRANTOR = 2;
-/** Minimum yes votes required (must match GeniusDao.GRANTOR_EXECUTE_THRESHOLD). */
 const EXECUTE_THRESHOLD = 10;
-/** Native ETH sent to each seat for gas (`registerSeat` + `voteYes`). 0.02 is usually enough on Sepolia; raise if txs fail under gas spikes. */
-const SEAT_FUND_ETH = "0.02";
+const GRANTOR_FUND_ETH = "5.0";
+const ALLOWANCES = [
+  "0",
+  "0",
+  "0",
+  "0",
+  "0",
+  "0",
+  "0",
+  "0",
+  "1041348000000000000",
+  "8000000000000000000000",
+  "7500000000000000000000",
+  "7000000000000000000000",
+  "6500000000000000000000",
+  "6000000000000000000000",
+  "5500000000000000000000",
+  "5000000000000000000000",
+];
+const FIRST_LIQUIDITY_DAYS = [14, 14, 14, 14, 14, 14, 14, 14, 0, 0, 0, 0, 0, 0, 0, 0];
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) {
@@ -56,12 +71,36 @@ async function main() {
 
   ensureDir(generatedDir);
 
-  // --- 16 seat wallets ---
+  // --- 16 grantor wallets ---
   const seats = [];
   for (let i = 0; i < SEAT_COUNT; i++) {
     const w = ethers.Wallet.createRandom().connect(ethers.provider);
     seats.push({ index: i, address: w.address, privateKey: w.privateKey });
   }
+
+  const grantors = seats.map((s, i) => ({
+    ...s,
+    liquidityAllowance: ALLOWANCES[i],
+    firstLiquidityDay: FIRST_LIQUIDITY_DAYS[i],
+  }));
+
+  const leafHexes = grantors.map((g) =>
+    ethers.utils.keccak256(
+      ethers.utils.defaultAbiCoder.encode(
+        ["address", "uint128", "uint128"],
+        [g.address, g.liquidityAllowance, g.firstLiquidityDay]
+      )
+    )
+  );
+  const leaves = leafHexes.map((h) => Buffer.from(h.slice(2), "hex"));
+  const merkleTree = new MerkleTree(leaves, keccak256, { sortPairs: true });
+  const grantorRoot = merkleTree.getHexRoot();
+
+  const grantorsWithProofs = grantors.map((g, i) => ({
+    ...g,
+    leaf: leafHexes[i],
+    merkleProof: merkleTree.getHexProof(leaves[i]),
+  }));
 
   fs.writeFileSync(
     keysPath,
@@ -71,20 +110,22 @@ async function main() {
         network: hre.network.name,
         chainId: (await ethers.provider.getNetwork()).chainId.toString(),
         generatedAt: new Date().toISOString(),
-        seats,
+        grantorRoot,
+        grantors: grantorsWithProofs,
       },
       null,
       2
     ),
     "utf8"
   );
-  console.log("Wrote seat keys to:", keysPath);
+  console.log("Wrote grantor wallets + proofs to:", keysPath);
+  console.log("Grantor root:", grantorRoot);
 
-  const seatAddresses = seats.map((s) => s.address);
+  const seatAddresses = grantors.map((s) => s.address);
 
-  // Fund seats from deployer
-  const fundWei = ethers.utils.parseEther(SEAT_FUND_ETH);
-  for (const s of seats) {
+  // Fund grantors from deployer
+  const fundWei = ethers.utils.parseEther(GRANTOR_FUND_ETH);
+  for (const s of grantors) {
     await deployer.sendTransaction({ to: s.address, value: fundWei });
   }
 
@@ -101,10 +142,6 @@ async function main() {
     process.env.GENI_V2 && process.env.GENI_V2.length > 0
       ? process.env.GENI_V2
       : deployer.address;
-  const grantorRoot =
-    process.env.GRANTOR_ROOT && process.env.GRANTOR_ROOT.length > 0
-      ? process.env.GRANTOR_ROOT
-      : ethers.utils.keccak256(ethers.utils.toUtf8Bytes("LOCAL_GRANTOR_ROOT"));
 
   // --- 2. GeniusDao ---
   const GeniusDao = await ethers.getContractFactory("GeniusDao", deployer);
@@ -125,35 +162,39 @@ async function main() {
     activeFeeAmount.toString()
   );
 
-  // --- 3. Elect DAO as pending Grantor owner ---
-  const electTx = await constitution.electNewGrantor(geniusDao.address);
-  await electTx.wait();
-  console.log("Constitution.electNewGrantor(GeniusDao) done; pending:", await constitution.getPendingOwner());
+  await (await constitution.electNewGrantor(geniusDao.address)).wait();
+  console.log(
+    "Constitution.electNewGrantor(GeniusDao) done; pending:",
+    await constitution.getPendingOwner()
+  );
 
-  // --- 4–5. Proposal: self-call daoAcceptGrantorOwnership(constitution) ---
+  for (let i = 0; i < SEAT_COUNT; i++) {
+    const signer = new ethers.Wallet(grantors[i].privateKey, ethers.provider);
+    const daoAsGrantor = geniusDao.connect(signer);
+    await (
+      await daoAsGrantor.acceptGrantorship(
+        grantorsWithProofs[i].merkleProof,
+        grantorsWithProofs[i].liquidityAllowance,
+        grantorsWithProofs[i].firstLiquidityDay
+      )
+    ).wait();
+  }
+  console.log("All generated grantors accepted grantorship");
+
   const acceptCalldata = geniusDao.interface.encodeFunctionData("daoAcceptGrantorOwnership", [
     constitution.address,
   ]);
   const actionHash = await geniusDao.hashAction(geniusDao.address, 0, acceptCalldata);
-
   const proposeInput = {
     eta: 0,
     linkProtocol: 0,
     url: ethers.constants.HashZero,
     proposalType: PROPOSAL_TYPE_GRANTOR,
   };
-
-  let proposeOpts = {};
-  if (activeFeeToken === ethers.constants.AddressZero) {
-    proposeOpts = { value: activeFeeAmount };
-  } else {
-    throw new Error(
-      "This script expects GeniusDao bootstrap fee in ETH (feeToken == 0x0). " +
-        "For ERC20 fees, approve GeniusDao and call propose with value 0, or change bootstrap in the contract."
-    );
+  if (activeFeeToken !== ethers.constants.AddressZero) {
+    throw new Error("This script expects bootstrap fee in ETH (feeToken == 0x0).");
   }
-
-  const proposeTx = await geniusDao.propose([actionHash], proposeInput, proposeOpts);
+  const proposeTx = await geniusDao.propose([actionHash], proposeInput, { value: activeFeeAmount });
   const proposeRc = await proposeTx.wait();
   let proposalId = null;
   for (const log of proposeRc.logs) {
@@ -164,38 +205,24 @@ async function main() {
         break;
       }
     } catch {
-      // ignore
+      // ignore non-DAO logs
     }
   }
   if (proposalId == null) {
     throw new Error("Could not parse ProposalCreated event");
   }
-  console.log("Proposal created, id:", proposalId.toString());
-
-  // Seats register + vote (need EXECUTE_THRESHOLD yes votes)
-  // Hardhat can over-estimate gas; a high gasLimit avoids false "insufficient funds" on in-memory network.
-  // On Sepolia, omit gasLimit so seats only reserve ~estimated cost (important when funding 0.02 ETH each).
-  const seatTxOpts =
-    hre.network.name === "hardhat" ? { gasLimit: 800000 } : {};
-
-  for (let i = 0; i < SEAT_COUNT; i++) {
-    const signer = new ethers.Wallet(seats[i].privateKey, ethers.provider);
-    const daoAsSeat = geniusDao.connect(signer);
-    await (await daoAsSeat.registerSeat(seatTxOpts)).wait();
-  }
+  console.log("Ownership proposal created, id:", proposalId.toString());
 
   for (let i = 0; i < EXECUTE_THRESHOLD; i++) {
-    const signer = new ethers.Wallet(seats[i].privateKey, ethers.provider);
-    const daoAsSeat = geniusDao.connect(signer);
-    await (await daoAsSeat.voteYes(proposalId, seatTxOpts)).wait();
+    const signer = new ethers.Wallet(grantors[i].privateKey, ethers.provider);
+    const daoAsGrantor = geniusDao.connect(signer);
+    await (await daoAsGrantor.voteYes(proposalId)).wait();
   }
   console.log("Votes recorded (threshold:", EXECUTE_THRESHOLD, ")");
 
-  // --- 6. Execute (any account; deployer used here) ---
   await (
     await geniusDao.execute(proposalId, [geniusDao.address], [0], [acceptCalldata])
   ).wait();
-
   const constitutionOwner = await constitution.owner();
   console.log("Constitution owner after acceptance:", constitutionOwner);
   if (constitutionOwner.toLowerCase() !== geniusDao.address.toLowerCase()) {
@@ -205,7 +232,9 @@ async function main() {
   console.log("\nDeployment summary:");
   console.log("  Constitution:", constitution.address);
   console.log("  GeniusDao: ", geniusDao.address);
-  console.log("  Seat keys: ", keysPath);
+  console.log("  Grantor root:", grantorRoot);
+  console.log("  Wallet/proof file:", keysPath);
+  console.log("  Grantor wallet funding:", GRANTOR_FUND_ETH, "ETH each");
 }
 
 main().catch((err) => {

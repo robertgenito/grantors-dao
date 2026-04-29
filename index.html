@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Genius DAO Local UI</title>
+    <style>
+      :root {
+        font-family: Arial, sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 20px;
+        background: #f6f7fb;
+        color: #111;
+      }
+      h1,
+      h2 {
+        margin: 0 0 12px;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #dfe3ee;
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .full {
+        grid-column: 1 / -1;
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        margin-bottom: 4px;
+        color: #444;
+      }
+      input,
+      select,
+      textarea,
+      button {
+        width: 100%;
+        box-sizing: border-box;
+        border-radius: 6px;
+        border: 1px solid #cdd4e0;
+        padding: 8px;
+        font-size: 13px;
+      }
+      textarea {
+        min-height: 70px;
+        resize: vertical;
+      }
+      button {
+        background: #1f6feb;
+        color: #fff;
+        border: 0;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      button.secondary {
+        background: #374151;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+      }
+      .status {
+        font-family: monospace;
+        background: #0d1117;
+        color: #c9d1d9;
+        padding: 10px;
+        border-radius: 6px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .hint {
+        font-size: 12px;
+        color: #666;
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+  </head>
+  <body>
+    <h1>Genius DAO (localhost)</h1>
+
+    <div class="card">
+      <h2>Connection</h2>
+      <div class="grid">
+        <div>
+          <label>GeniusDao (hardcoded localhost default)</label>
+          <input id="daoAddress" value="0x0000000000000000000000000000000000000000" />
+        </div>
+        <div>
+          <label>Constitution (hardcoded localhost default)</label>
+          <input id="constitutionAddress" value="0x0000000000000000000000000000000000000000" />
+        </div>
+        <div class="full row">
+          <button id="connectBtn">Connect MetaMask</button>
+          <button id="refreshFeeBtn" class="secondary">Refresh Fee</button>
+        </div>
+        <div class="full hint" id="walletInfo">Not connected</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Proposal Builder</h2>
+      <div class="grid">
+        <div>
+          <label>Proposal Type</label>
+          <select id="proposalType">
+            <option value="1">Native (1)</option>
+            <option value="2">Grantor (2)</option>
+          </select>
+        </div>
+        <div>
+          <label>Target</label>
+          <input id="proposalTarget" placeholder="0x..." />
+        </div>
+        <div>
+          <label>Value (uint96)</label>
+          <input id="proposalValue" value="0" />
+        </div>
+        <div>
+          <label>Eta (uint40, unix sec)</label>
+          <input id="proposalEta" value="0" />
+        </div>
+        <div>
+          <label>Link Protocol (uint8)</label>
+          <input id="proposalLinkProtocol" value="0" />
+        </div>
+        <div>
+          <label>URL bytes32</label>
+          <input id="proposalUrl" value="0x0000000000000000000000000000000000000000000000000000000000000000" />
+        </div>
+        <div class="full">
+          <label>Calldata (hex)</label>
+          <textarea id="proposalCalldata" placeholder="0x..."></textarea>
+        </div>
+        <div class="full row">
+          <button id="hashActionBtn" class="secondary">Compute Action Hash</button>
+          <button id="createProposalBtn">Create Proposal</button>
+        </div>
+        <div class="full hint" id="actionHashOut">Action hash: (not computed)</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Voting</h2>
+      <div class="grid">
+        <div>
+          <label>Proposal ID</label>
+          <input id="voteProposalId" value="1" />
+        </div>
+        <div>
+          <label>Disagree reason (bytes32 hex OR short text)</label>
+          <input id="disagreeReason" value="needs-review" />
+        </div>
+        <div class="full row">
+          <button id="voteYesBtn">Vote Yes</button>
+          <button id="removeVoteBtn" class="secondary">Remove Vote</button>
+          <button id="disagreeBtn" class="secondary">Disagree</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Execute Proposal</h2>
+      <div class="grid">
+        <div>
+          <label>Proposal ID</label>
+          <input id="executeProposalId" value="1" />
+        </div>
+        <div></div>
+        <div class="full">
+          <label>Targets JSON array</label>
+          <textarea id="executeTargets">["0x0000000000000000000000000000000000000000"]</textarea>
+        </div>
+        <div class="full">
+          <label>Values JSON array (uint96)</label>
+          <textarea id="executeValues">["0"]</textarea>
+        </div>
+        <div class="full">
+          <label>Datas JSON array (hex calldata)</label>
+          <textarea id="executeDatas">["0x"]</textarea>
+        </div>
+        <div class="full">
+          <button id="executeBtn">Execute</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Read / Validate</h2>
+      <div class="grid">
+        <div>
+          <label>Read Proposal ID</label>
+          <input id="readProposalId" value="1" />
+        </div>
+        <div>
+          <label>Native target check address</label>
+          <input id="nativeTargetCheck" placeholder="0x..." />
+        </div>
+        <div class="full row">
+          <button id="readProposalBtn" class="secondary">Read Proposal</button>
+          <button id="checkSeatBtn" class="secondary">Check Seat Active</button>
+          <button id="checkNativeTargetBtn" class="secondary">Check Native Target</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Status</h2>
+      <div id="status" class="status">Ready.</div>
+    </div>
+
+    <script>
+      const ZERO32 = "0x" + "00".repeat(32);
+      const REQUIRED_CHAIN_ID = 31337;
+
+      const DAO_ABI = [
+        "function proposalTypeNative() view returns (uint256)",
+        "function proposalTypeGrantor() view returns (uint256)",
+        "function feeToken() view returns (address)",
+        "function fee() view returns (uint96)",
+        "function hashAction(address target, uint96 value, bytes data) pure returns (bytes32)",
+        "function propose(bytes32[] actionHashes, tuple(uint40 eta,uint8 linkProtocol,bytes32 url,uint256 proposalType) input) payable returns (uint256)",
+        "function voteYes(uint256 proposalId) returns (uint16)",
+        "function removeVote(uint256 proposalId) returns (uint16)",
+        "function disagree(uint256 proposalId, bytes32 reason)",
+        "function execute(uint256 proposalId, address[] targets, uint96[] values, bytes[] datas) returns (bytes[] rets)",
+        "function proposal(uint256 proposalId) view returns (tuple(address proposer,uint40 createdOn,uint40 eta,uint8 meta,uint16 approvals,uint8 linkProtocol,bytes32 url))",
+        "function actionHash(uint256 proposalId, uint256 index) view returns (bytes32)",
+        "function isSeatActive(address seat) view returns (bool)",
+        "function isNativeTargetAllowed(address target) view returns (bool)",
+        "event ProposalCreated(uint256 indexed proposalId,address indexed proposer,uint40 eta,uint40 expiresOn,uint8 actionCount,uint8 linkProtocol,bytes32 url)"
+      ];
+
+      let provider;
+      let signer;
+      let dao;
+      let account;
+
+      const $ = (id) => document.getElementById(id);
+      const statusEl = $("status");
+
+      function setStatus(msg, obj) {
+        statusEl.textContent = obj ? `${msg}\n${JSON.stringify(obj, null, 2)}` : msg;
+      }
+
+      function parseReasonToBytes32(input) {
+        if (ethers.utils.isHexString(input, 32)) return input;
+        return ethers.utils.formatBytes32String(String(input).slice(0, 31));
+      }
+
+      function requireAddress(v, name) {
+        if (!ethers.utils.isAddress(v)) throw new Error(`${name} is not a valid address`);
+      }
+
+      function requireHexData(v, name) {
+        if (!ethers.utils.isHexString(v)) throw new Error(`${name} must be hex data`);
+      }
+
+      function parseJsonArray(text, name) {
+        let parsed;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          throw new Error(`${name} must be valid JSON array`);
+        }
+        if (!Array.isArray(parsed)) throw new Error(`${name} must be an array`);
+        return parsed;
+      }
+
+      async function ensureConnected() {
+        if (!window.ethereum) throw new Error("MetaMask not found");
+        if (!dao) throw new Error("Connect MetaMask first");
+      }
+
+      async function connect() {
+        if (!window.ethereum) throw new Error("MetaMask not found");
+        provider = new ethers.providers.Web3Provider(window.ethereum, "any");
+        await provider.send("eth_requestAccounts", []);
+        signer = provider.getSigner();
+        account = await signer.getAddress();
+        const network = await provider.getNetwork();
+
+        const daoAddress = $("daoAddress").value.trim();
+        requireAddress(daoAddress, "GeniusDao");
+        dao = new ethers.Contract(daoAddress, DAO_ABI, signer);
+
+        $("walletInfo").textContent =
+          `Connected: ${account} | chainId: ${network.chainId}` +
+          (network.chainId !== REQUIRED_CHAIN_ID ? " (expected localhost 31337)" : "");
+        setStatus("Connected.");
+      }
+
+      async function refreshFee() {
+        await ensureConnected();
+        const [feeToken, fee] = await Promise.all([dao.feeToken(), dao.fee()]);
+        setStatus("Fee config", { feeToken, fee: fee.toString() });
+      }
+
+      async function computeActionHash() {
+        await ensureConnected();
+        const target = $("proposalTarget").value.trim();
+        const value = $("proposalValue").value.trim();
+        const data = $("proposalCalldata").value.trim();
+        requireAddress(target, "Target");
+        requireHexData(data, "Calldata");
+        const hash = await dao.hashAction(target, value, data);
+        $("actionHashOut").textContent = `Action hash: ${hash}`;
+        setStatus("Computed action hash.");
+      }
+
+      async function createProposal() {
+        await ensureConnected();
+        const target = $("proposalTarget").value.trim();
+        const value = $("proposalValue").value.trim();
+        const data = $("proposalCalldata").value.trim();
+        requireAddress(target, "Target");
+        requireHexData(data, "Calldata");
+
+        const actionHash = await dao.hashAction(target, value, data);
+        $("actionHashOut").textContent = `Action hash: ${actionHash}`;
+
+        const input = {
+          eta: $("proposalEta").value.trim() || "0",
+          linkProtocol: $("proposalLinkProtocol").value.trim() || "0",
+          url: $("proposalUrl").value.trim() || ZERO32,
+          proposalType: $("proposalType").value.trim()
+        };
+        if (!ethers.utils.isHexString(input.url, 32)) {
+          throw new Error("URL must be bytes32 hex");
+        }
+
+        const feeToken = await dao.feeToken();
+        const fee = await dao.fee();
+        const overrides = {};
+        if (feeToken === ethers.constants.AddressZero) {
+          overrides.value = fee;
+        }
+
+        const tx = await dao.propose([actionHash], input, overrides);
+        const rc = await tx.wait();
+        let proposalId = null;
+        for (const log of rc.logs) {
+          try {
+            const parsed = dao.interface.parseLog(log);
+            if (parsed.name === "ProposalCreated") {
+              proposalId = parsed.args.proposalId.toString();
+              break;
+            }
+          } catch (_) {}
+        }
+        setStatus("Proposal created", { txHash: tx.hash, proposalId, actionHash });
+      }
+
+      async function voteYes() {
+        await ensureConnected();
+        const id = $("voteProposalId").value.trim();
+        const tx = await dao.voteYes(id);
+        await tx.wait();
+        setStatus("Voted yes", { proposalId: id, txHash: tx.hash });
+      }
+
+      async function removeVote() {
+        await ensureConnected();
+        const id = $("voteProposalId").value.trim();
+        const tx = await dao.removeVote(id);
+        await tx.wait();
+        setStatus("Vote removed", { proposalId: id, txHash: tx.hash });
+      }
+
+      async function disagree() {
+        await ensureConnected();
+        const id = $("voteProposalId").value.trim();
+        const reason = parseReasonToBytes32($("disagreeReason").value.trim());
+        const tx = await dao.disagree(id, reason);
+        await tx.wait();
+        setStatus("Disagree submitted", { proposalId: id, reason, txHash: tx.hash });
+      }
+
+      async function executeProposal() {
+        await ensureConnected();
+        const id = $("executeProposalId").value.trim();
+        const targets = parseJsonArray($("executeTargets").value.trim(), "Targets");
+        const values = parseJsonArray($("executeValues").value.trim(), "Values");
+        const datas = parseJsonArray($("executeDatas").value.trim(), "Datas");
+        if (targets.length !== values.length || values.length !== datas.length) {
+          throw new Error("targets/values/datas length mismatch");
+        }
+        targets.forEach((a, i) => requireAddress(a, `Target[${i}]`));
+        datas.forEach((d, i) => requireHexData(d, `Data[${i}]`));
+
+        const tx = await dao.execute(id, targets, values, datas);
+        await tx.wait();
+        setStatus("Proposal executed", { proposalId: id, txHash: tx.hash });
+      }
+
+      async function readProposal() {
+        await ensureConnected();
+        const id = $("readProposalId").value.trim();
+        const p = await dao.proposal(id);
+        setStatus("Proposal read", {
+          proposalId: id,
+          proposer: p.proposer,
+          createdOn: p.createdOn.toString(),
+          eta: p.eta.toString(),
+          meta: p.meta,
+          approvals: p.approvals.toString(),
+          linkProtocol: p.linkProtocol,
+          url: p.url
+        });
+      }
+
+      async function checkSeat() {
+        await ensureConnected();
+        const active = await dao.isSeatActive(account);
+        setStatus("Seat active check", { account, active });
+      }
+
+      async function checkNativeTarget() {
+        await ensureConnected();
+        const target = $("nativeTargetCheck").value.trim();
+        requireAddress(target, "Native target check");
+        const allowed = await dao.isNativeTargetAllowed(target);
+        setStatus("Native target allowlist check", { target, allowed });
+      }
+
+      async function run(fn) {
+        try {
+          await fn();
+        } catch (e) {
+          setStatus("Error", { message: e?.reason || e?.message || String(e) });
+        }
+      }
+
+      $("connectBtn").onclick = () => run(connect);
+      $("refreshFeeBtn").onclick = () => run(refreshFee);
+      $("hashActionBtn").onclick = () => run(computeActionHash);
+      $("createProposalBtn").onclick = () => run(createProposal);
+      $("voteYesBtn").onclick = () => run(voteYes);
+      $("removeVoteBtn").onclick = () => run(removeVote);
+      $("disagreeBtn").onclick = () => run(disagree);
+      $("executeBtn").onclick = () => run(executeProposal);
+      $("readProposalBtn").onclick = () => run(readProposal);
+      $("checkSeatBtn").onclick = () => run(checkSeat);
+      $("checkNativeTargetBtn").onclick = () => run(checkNativeTarget);
+    </script>
+  </body>
+</html>
