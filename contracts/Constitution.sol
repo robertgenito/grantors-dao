@@ -157,7 +157,7 @@ contract Grantor is AllContracts {
         uint8 count
     );
     event OwnershipTransferStarted(address indexed previousOwner, address indexed pendingOwner);
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferred(address indexed newOwner);
     event GeniusCallExecuted(address indexed target, uint96 value, bytes4 selector);
 
     /***************************************************************************
@@ -298,10 +298,10 @@ contract Grantor is AllContracts {
     function acceptOwnership() external {
         address nominated = pendingOwner;
         if (msg.sender != nominated) revert ENotPendingOwner();
-        address previousOwner = owner;
+        // address previousOwner = owner;
         owner = nominated;
         pendingOwner = address(0);
-        emit OwnershipTransferred(previousOwner, nominated); //lET'S CALL IT NEW OWNER
+        emit OwnershipTransferred(nominated); //lET'S CALL IT NEW OWNER
     }
 
     // The Grantor contract is the single "house" that executes calls into Genius contracts.
