@@ -68,6 +68,15 @@ async function main() {
     generatedDir,
     `grantor-seat-keys-${hre.network.name}-${(await ethers.provider.getNetwork()).chainId}.json`
   );
+  const deploymentPath = path.join(
+    generatedDir,
+    `local-deployment-${hre.network.name}-${(await ethers.provider.getNetwork()).chainId}.json`
+  );
+  const rootDeploymentPath = path.join(
+    __dirname,
+    "..",
+    "local-deployment.json"
+  );
 
   ensureDir(generatedDir);
 
@@ -229,11 +238,26 @@ async function main() {
     throw new Error("Ownership transfer failed: Constitution owner is not GeniusDao");
   }
 
+  const deploymentConfig = {
+    network: hre.network.name,
+    chainId: (await ethers.provider.getNetwork()).chainId.toString(),
+    constitution: constitution.address,
+    geniusDao: geniusDao.address,
+    grantorRoot,
+  };
+
+  fs.writeFileSync(deploymentPath, JSON.stringify(deploymentConfig, null, 2), "utf8");
+  fs.writeFileSync(rootDeploymentPath, JSON.stringify(deploymentConfig, null, 2), "utf8");
+  console.log("Wrote frontend deployment config:", deploymentPath);
+  console.log("Wrote root deployment config:", rootDeploymentPath);
+
   console.log("\nDeployment summary:");
   console.log("  Constitution:", constitution.address);
   console.log("  GeniusDao: ", geniusDao.address);
   console.log("  Grantor root:", grantorRoot);
   console.log("  Wallet/proof file:", keysPath);
+  console.log("  Deployment config:", deploymentPath);
+  console.log("  Root deployment config:", rootDeploymentPath);
   console.log("  Grantor wallet funding:", GRANTOR_FUND_ETH, "ETH each");
 }
 

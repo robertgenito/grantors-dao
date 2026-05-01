@@ -81,22 +81,58 @@
         font-size: 12px;
         color: #666;
       }
+      .actions-wrap {
+        display: grid;
+        gap: 10px;
+      }
+      .action-card {
+        border: 1px solid #dfe3ee;
+        border-radius: 6px;
+        padding: 10px;
+        background: #fafbff;
+      }
+      .addr-box {
+        font-family: monospace;
+        background: #f3f5fb;
+        border: 1px solid #dfe3ee;
+        border-radius: 6px;
+        padding: 10px;
+        word-break: break-all;
+      }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
   </head>
   <body>
     <h1>Genius DAO (localhost)</h1>
+    <div id="addressBanner" class="hint" style="margin: 8px 0 14px;">
+      GeniusDao: <span id="bannerDaoAddress">0x0000000000000000000000000000000000000000</span> |
+      Constitution: <span id="bannerConstitutionAddress">0x0000000000000000000000000000000000000000</span>
+    </div>
+
+    <div class="card">
+      <h2>Hardcoded Local Addresses</h2>
+      <div class="grid">
+        <div class="full">
+          <label>GeniusDao</label>
+          <div id="hardcodedDaoAddress" class="addr-box">0x0000000000000000000000000000000000000000</div>
+        </div>
+        <div class="full">
+          <label>Constitution</label>
+          <div id="hardcodedConstitutionAddress" class="addr-box">0x0000000000000000000000000000000000000000</div>
+        </div>
+      </div>
+    </div>
 
     <div class="card">
       <h2>Connection</h2>
       <div class="grid">
         <div>
-          <label>GeniusDao (hardcoded localhost default)</label>
-          <input id="daoAddress" value="0x0000000000000000000000000000000000000000" />
+          <label>GeniusDao (deployment address)</label>
+          <div id="connectionDaoAddress" class="addr-box">0x0000000000000000000000000000000000000000</div>
         </div>
         <div>
-          <label>Constitution (hardcoded localhost default)</label>
-          <input id="constitutionAddress" value="0x0000000000000000000000000000000000000000" />
+          <label>Constitution (deployment address)</label>
+          <div id="connectionConstitutionAddress" class="addr-box">0x0000000000000000000000000000000000000000</div>
         </div>
         <div class="full row">
           <button id="connectBtn">Connect MetaMask</button>
@@ -110,19 +146,15 @@
       <h2>Proposal Builder</h2>
       <div class="grid">
         <div>
+          <label>Action Count (0-8)</label>
+          <input id="proposalActionCount" type="number" min="0" max="8" value="1" />
+        </div>
+        <div>
           <label>Proposal Type</label>
           <select id="proposalType">
             <option value="1">Native (1)</option>
             <option value="2">Grantor (2)</option>
           </select>
-        </div>
-        <div>
-          <label>Target</label>
-          <input id="proposalTarget" placeholder="0x..." />
-        </div>
-        <div>
-          <label>Value (uint96)</label>
-          <input id="proposalValue" value="0" />
         </div>
         <div>
           <label>Eta (uint40, unix sec)</label>
@@ -137,8 +169,12 @@
           <input id="proposalUrl" value="0x0000000000000000000000000000000000000000000000000000000000000000" />
         </div>
         <div class="full">
+          <label>Actions (target/value/calldata)</label>
+          <div id="actionsContainer" class="actions-wrap"></div>
+        </div>
+        <div class="full">
           <label>Calldata (hex)</label>
-          <textarea id="proposalCalldata" placeholder="0x..."></textarea>
+          <textarea id="proposalCalldata" placeholder="Deprecated single-action field"></textarea>
         </div>
         <div class="full row">
           <button id="hashActionBtn" class="secondary">Compute Action Hash</button>
@@ -220,6 +256,10 @@
     <script>
       const ZERO32 = "0x" + "00".repeat(32);
       const REQUIRED_CHAIN_ID = 31337;
+      const DEFAULT_ADDRESSES = {
+        geniusDao: "0x0000000000000000000000000000000000000000",
+        constitution: "0x0000000000000000000000000000000000000000",
+      };
 
       const DAO_ABI = [
         "function proposalTypeNative() view returns (uint256)",
@@ -243,9 +283,115 @@
       let signer;
       let dao;
       let account;
+      let currentDaoAddress = DEFAULT_ADDRESSES.geniusDao;
+      let currentConstitutionAddress = DEFAULT_ADDRESSES.constitution;
 
       const $ = (id) => document.getElementById(id);
       const statusEl = $("status");
+      const actionsContainer = $("actionsContainer");
+
+      function buildActionsInputs(count) {
+        actionsContainer.innerHTML = "";
+        for (let i = 0; i < count; i++) {
+          const card = document.createElement("div");
+          card.className = "action-card";
+          card.innerHTML = `
+            <div><strong>Action ${i + 1}</strong></div>
+            <label>Target</label>
+            <input id="proposalTarget_${i}" placeholder="0x..." />
+            <label>Value (uint96)</label>
+            <input id="proposalValue_${i}" value="0" />
+            <label>Calldata (hex)</label>
+            <textarea id="proposalCalldata_${i}" placeholder="0x..."></textarea>
+          `;
+          actionsContainer.appendChild(card);
+        }
+        syncProposalTypeTargetMode();
+      }
+
+      function isGrantorProposalTypeSelected() {
+        return String($("proposalType").value || "") === "2";
+      }
+
+      function syncProposalTypeTargetMode() {
+        const count = Number($("proposalActionCount").value || 0);
+        const lockToDao = isGrantorProposalTypeSelected();
+        for (let i = 0; i < count; i++) {
+          const targetInput = $(`proposalTarget_${i}`);
+          if (!targetInput) continue;
+          if (lockToDao) {
+            targetInput.value = currentDaoAddress;
+            targetInput.disabled = true;
+            targetInput.title = "Grantor proposals are locked to GeniusDao target";
+          } else {
+            targetInput.disabled = false;
+            targetInput.title = "";
+          }
+        }
+      }
+
+      function readActionsFromUI() {
+        const count = Number($("proposalActionCount").value || 0);
+        if (!Number.isInteger(count) || count < 0 || count > 8) {
+          throw new Error("Action count must be an integer between 0 and 8");
+        }
+        const actions = [];
+        for (let i = 0; i < count; i++) {
+          const target = $(`proposalTarget_${i}`).value.trim();
+          const value = $(`proposalValue_${i}`).value.trim();
+          const data = $(`proposalCalldata_${i}`).value.trim();
+          requireAddress(target, `Action ${i + 1} target`);
+          requireHexData(data, `Action ${i + 1} calldata`);
+          actions.push({ target, value, data });
+        }
+        return actions;
+      }
+
+      async function loadDeployedAddresses() {
+        const candidates = [
+          "local-deployment.json",
+          "./local-deployment.json",
+          "/local-deployment.json",
+          "scripts/generated/local-deployment-localhost-31337.json",
+          "./scripts/generated/local-deployment-localhost-31337.json",
+          "/scripts/generated/local-deployment-localhost-31337.json",
+          "scripts/generated/local-deployment-hardhat-31337.json",
+          "./scripts/generated/local-deployment-hardhat-31337.json",
+          "/scripts/generated/local-deployment-hardhat-31337.json"
+        ];
+        for (const p of candidates) {
+          try {
+            const res = await fetch(p, { cache: "no-store" });
+            if (!res.ok) continue;
+            const cfg = await res.json();
+            if (cfg?.geniusDao && cfg?.constitution) {
+              currentDaoAddress = cfg.geniusDao;
+              currentConstitutionAddress = cfg.constitution;
+              $("hardcodedDaoAddress").textContent = cfg.geniusDao;
+              $("hardcodedConstitutionAddress").textContent = cfg.constitution;
+              $("bannerDaoAddress").textContent = cfg.geniusDao;
+              $("bannerConstitutionAddress").textContent = cfg.constitution;
+              $("connectionDaoAddress").textContent = cfg.geniusDao;
+              $("connectionConstitutionAddress").textContent = cfg.constitution;
+              syncProposalTypeTargetMode();
+              setStatus("Loaded deployment config", { source: p, ...cfg });
+              return;
+            }
+          } catch (_) {}
+        }
+        currentDaoAddress = DEFAULT_ADDRESSES.geniusDao;
+        currentConstitutionAddress = DEFAULT_ADDRESSES.constitution;
+        $("hardcodedDaoAddress").textContent = DEFAULT_ADDRESSES.geniusDao;
+        $("hardcodedConstitutionAddress").textContent = DEFAULT_ADDRESSES.constitution;
+        $("bannerDaoAddress").textContent = DEFAULT_ADDRESSES.geniusDao;
+        $("bannerConstitutionAddress").textContent = DEFAULT_ADDRESSES.constitution;
+        $("connectionDaoAddress").textContent = DEFAULT_ADDRESSES.geniusDao;
+        $("connectionConstitutionAddress").textContent = DEFAULT_ADDRESSES.constitution;
+        syncProposalTypeTargetMode();
+        setStatus("Deployment config not found; using fallback hardcoded defaults.", {
+          candidates
+        });
+      }
 
       function setStatus(msg, obj) {
         statusEl.textContent = obj ? `${msg}\n${JSON.stringify(obj, null, 2)}` : msg;
@@ -288,7 +434,7 @@
         account = await signer.getAddress();
         const network = await provider.getNetwork();
 
-        const daoAddress = $("daoAddress").value.trim();
+        const daoAddress = String(currentDaoAddress || "").trim();
         requireAddress(daoAddress, "GeniusDao");
         dao = new ethers.Contract(daoAddress, DAO_ABI, signer);
 
@@ -306,26 +452,23 @@
 
       async function computeActionHash() {
         await ensureConnected();
-        const target = $("proposalTarget").value.trim();
-        const value = $("proposalValue").value.trim();
-        const data = $("proposalCalldata").value.trim();
-        requireAddress(target, "Target");
-        requireHexData(data, "Calldata");
-        const hash = await dao.hashAction(target, value, data);
-        $("actionHashOut").textContent = `Action hash: ${hash}`;
-        setStatus("Computed action hash.");
+        const actions = readActionsFromUI();
+        const hashes = [];
+        for (const a of actions) {
+          hashes.push(await dao.hashAction(a.target, a.value, a.data));
+        }
+        $("actionHashOut").textContent = `Action hashes: ${JSON.stringify(hashes)}`;
+        setStatus("Computed action hash(es).", { count: hashes.length, hashes });
       }
 
       async function createProposal() {
         await ensureConnected();
-        const target = $("proposalTarget").value.trim();
-        const value = $("proposalValue").value.trim();
-        const data = $("proposalCalldata").value.trim();
-        requireAddress(target, "Target");
-        requireHexData(data, "Calldata");
-
-        const actionHash = await dao.hashAction(target, value, data);
-        $("actionHashOut").textContent = `Action hash: ${actionHash}`;
+        const actions = readActionsFromUI();
+        const actionHashes = [];
+        for (const a of actions) {
+          actionHashes.push(await dao.hashAction(a.target, a.value, a.data));
+        }
+        $("actionHashOut").textContent = `Action hashes: ${JSON.stringify(actionHashes)}`;
 
         const input = {
           eta: $("proposalEta").value.trim() || "0",
@@ -344,7 +487,7 @@
           overrides.value = fee;
         }
 
-        const tx = await dao.propose([actionHash], input, overrides);
+        const tx = await dao.propose(actionHashes, input, overrides);
         const rc = await tx.wait();
         let proposalId = null;
         for (const log of rc.logs) {
@@ -356,7 +499,7 @@
             }
           } catch (_) {}
         }
-        setStatus("Proposal created", { txHash: tx.hash, proposalId, actionHash });
+        setStatus("Proposal created", { txHash: tx.hash, proposalId, actionHashes });
       }
 
       async function voteYes() {
@@ -450,6 +593,16 @@
       $("readProposalBtn").onclick = () => run(readProposal);
       $("checkSeatBtn").onclick = () => run(checkSeat);
       $("checkNativeTargetBtn").onclick = () => run(checkNativeTarget);
+
+      $("proposalActionCount").addEventListener("input", () => {
+        const n = Math.max(0, Math.min(8, Number($("proposalActionCount").value || 0)));
+        $("proposalActionCount").value = String(n);
+        buildActionsInputs(n);
+      });
+      $("proposalType").addEventListener("change", syncProposalTypeTargetMode);
+
+      buildActionsInputs(1);
+      loadDeployedAddresses();
     </script>
   </body>
 </html>
