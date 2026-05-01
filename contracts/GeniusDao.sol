@@ -50,6 +50,8 @@ error EReentrant();
 error EUnauthorizedDirector();
 error EGrantorDataAlreadyAccepted();
 error EInvalidGrantorProof();
+error EGrantorDataNotAccepted();
+error EAllowanceIncreaseOnly();
 
 /*******************************************************************************
  *
@@ -187,6 +189,11 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
         address indexed requester,
         address indexed grantor,
         address indexed newDao
+    );
+    event GrantorLiquidityAllowanceIncreased(
+        address indexed grantor,
+        uint128 previous,
+        uint128 next
     );
 
 // Let's call this "Accepted", like "GrantorWhitelistAccepted", implying that
@@ -831,6 +838,20 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
         returns (bytes memory ret)
     {
         ret = _constitution.callAnyContract(target, value, data);
+    }
+
+    function daoIncreaseGrantorLiquidityAllowance(address grantor, uint128 newAllowance)
+        external
+        onlySelf
+    {
+        if (_grantorDataAccepted[grantor] != 2) revert EGrantorDataNotAccepted();
+
+        GrantorData storage d = _grantorData[grantor];
+        uint128 previous = d.liquidityAllowance;
+        if (newAllowance <= previous) revert EAllowanceIncreaseOnly();
+
+        d.liquidityAllowance = newAllowance;
+        emit GrantorLiquidityAllowanceIncreased(grantor, previous, newAllowance);
     }
 
 // I think we need this functionality for GENI. The proposal fees would be in GENI right?
