@@ -19,4 +19,5 @@ package-lock.json
 *.swp
 *.swo
 scripts/future-dash.js
+scripts/generated/
 Genius Grantors - First Launch.md

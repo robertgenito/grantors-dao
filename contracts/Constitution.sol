@@ -420,9 +420,9 @@ contract Constitution is AllContracts {
 
     function _selector(bytes calldata data) internal pure returns (bytes4 s) {
         if (data.length < 4) revert EBadCalldata();
-        assembly {
-            s := shr(224, calldataload(data.offset))
-        }
+        // Use logical first 4 payload bytes. `data.offset` points at the ABI length word,
+        // not the byte payload; calldataload(data.offset) would read length, not the selector.
+        s = bytes4(data);
     }
 
     /***************************************************************************

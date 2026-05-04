@@ -524,9 +524,7 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
 
     function _selector(bytes calldata data) internal pure returns (bytes4 s) {
         if (data.length < 4) return bytes4(0);
-        assembly {
-            s := shr(224, calldataload(data.offset))
-        }
+        s = bytes4(data);
     }
 
     function _executeAction(
