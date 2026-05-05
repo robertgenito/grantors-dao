@@ -91,9 +91,11 @@ module.exports = {
       allowUnlimitedContractSize: true,
     },
     sepolia: {
-      url: process.env.SEPOLIA_RPC_URL || "",
-      accounts: process.env.SEPOLIA_DEPLOYER_PRIVATE_KEY // Gotta get your own keys Brah!!
-        ? [process.env.SEPOLIA_DEPLOYER_PRIVATE_KEY]
+      url:
+        process.env.SEPOLIA_RPC_URL ||
+        (process.env.INFURA_API_KEY ? `https://sepolia.infura.io/v3/${process.env.INFURA_API_KEY}` : ""),
+      accounts: process.env.GENIUS_GRANTOR_PRIVATE_KEY
+        ? [process.env.GENIUS_GRANTOR_PRIVATE_KEY]
         : [],
     },
   },

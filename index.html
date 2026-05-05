@@ -3,20 +3,66 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Genius DAO Local UI</title>
+    <title>Genius DAO</title>
     <style>
       :root {
-        font-family: Arial, sans-serif;
+        font-family: system-ui, Arial, sans-serif;
       }
       body {
         margin: 0;
-        padding: 20px;
-        background: #f6f7fb;
+        padding: 0;
+        background: #f0f2f7;
         color: #111;
       }
-      h1,
+      .navbar {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px 20px;
+        padding: 10px 16px;
+        background: #fff;
+        border-bottom: 1px solid #dfe3ee;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+      }
+      .nav-brand {
+        font-weight: 800;
+        font-size: 1.1rem;
+      }
+      .nav-addrs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        font-size: 12px;
+        color: #333;
+      }
+      .nav-addrs code {
+        font-size: 11px;
+        background: #f3f5fb;
+        padding: 2px 6px;
+        border-radius: 4px;
+        border: 1px solid #e2e8f0;
+      }
+      .nav-chain {
+        font-size: 13px;
+        font-weight: 600;
+        color: #1f6feb;
+        margin-left: auto;
+      }
+      .nav-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .main {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 16px;
+      }
       h2 {
         margin: 0 0 12px;
+        font-size: 1.05rem;
       }
       .card {
         background: #fff;
@@ -51,8 +97,10 @@
         font-size: 13px;
       }
       textarea {
-        min-height: 70px;
+        min-height: 56px;
         resize: vertical;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
       }
       button {
         background: #1f6feb;
@@ -64,18 +112,32 @@
       button.secondary {
         background: #374151;
       }
+      button.btn-sm {
+        padding: 4px 10px;
+        font-size: 12px;
+        width: auto;
+      }
       .row {
         display: flex;
         gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .row-spread {
+        justify-content: space-between;
+        align-items: flex-start;
       }
       .status {
-        font-family: monospace;
+        font-family: ui-monospace, monospace;
         background: #0d1117;
         color: #c9d1d9;
         padding: 10px;
         border-radius: 6px;
         white-space: pre-wrap;
         word-break: break-word;
+        font-size: 12px;
+        max-height: 280px;
+        overflow: auto;
       }
       .hint {
         font-size: 12px;
@@ -88,177 +150,269 @@
       .action-card {
         border: 1px solid #dfe3ee;
         border-radius: 6px;
-        padding: 10px;
+        padding: 12px;
         background: #fafbff;
       }
-      .addr-box {
-        font-family: monospace;
+      .action-preview {
+        margin-top: 8px;
+        padding: 8px;
         background: #f3f5fb;
-        border: 1px solid #dfe3ee;
-        border-radius: 6px;
-        padding: 10px;
+        border-radius: 4px;
+        font-size: 11px;
         word-break: break-all;
+      }
+      .scan-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: 220px;
+        overflow-y: auto;
+      }
+      .scan-item {
+        text-align: left;
+        padding: 10px;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        background: #fff;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .scan-item:hover {
+        border-color: #1f6feb;
+      }
+      .scan-item.selected {
+        border-color: #1f6feb;
+        background: #eef4ff;
+      }
+      details.advanced {
+        margin-top: 8px;
+      }
+      .hidden {
+        display: none !important;
       }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
   </head>
   <body>
-    <h1>Genius DAO (localhost)</h1>
-    <div id="addressBanner" class="hint" style="margin: 8px 0 14px;">
-      GeniusDao: <span id="bannerDaoAddress">0x0000000000000000000000000000000000000000</span> |
-      Constitution: <span id="bannerConstitutionAddress">0x0000000000000000000000000000000000000000</span>
-    </div>
+    <nav class="navbar">
+      <div class="nav-brand">Genius DAO</div>
+      <div class="nav-addrs">
+        <span title="GeniusDao (full address in tooltip after load)"
+          >DAO <code id="navDaoAddr">—</code></span
+        >
+        <span title="Constitution"
+          >Constitution <code id="navConstAddr">—</code></span
+        >
+      </div>
+      <div class="nav-chain" id="navChainLabel">Chain: —</div>
+      <div class="nav-actions">
+        <button type="button" id="navConnectBtn">Connect Wallet</button>
+        <button type="button" id="navRefreshFeeBtn" class="secondary">Refresh fee</button>
+      </div>
+    </nav>
 
-    <div class="card">
-      <h2>Hardcoded Local Addresses</h2>
-      <div class="grid">
-        <div class="full">
-          <label>GeniusDao</label>
-          <div id="hardcodedDaoAddress" class="addr-box">0x0000000000000000000000000000000000000000</div>
-        </div>
-        <div class="full">
-          <label>Constitution</label>
-          <div id="hardcodedConstitutionAddress" class="addr-box">0x0000000000000000000000000000000000000000</div>
+    <main class="main">
+      <p class="hint" id="walletInfo">Wallet: not connected</p>
+      <div class="card">
+        <h2>Accept grantorship</h2>
+        <p class="hint">
+          Uses connected wallet to find your grantor row and auto-build
+          <code>proof</code>, <code>allowance</code>, and <code>firstDay</code>.
+        </p>
+        <div class="grid">
+          <div class="full row">
+            <button type="button" id="acceptGrantorshipBtn">
+              Accept Grantorship (connected wallet)
+            </button>
+          </div>
+          <div class="full hint" id="grantorAcceptPreview">
+            Preview: connect wallet to check grantor dataset.
+          </div>
+          <div class="full status" id="grantorAcceptStatus">null</div>
         </div>
       </div>
-    </div>
 
-    <div class="card">
-      <h2>Connection</h2>
-      <div class="grid">
-        <div>
-          <label>GeniusDao (deployment address)</label>
-          <div id="connectionDaoAddress" class="addr-box">0x0000000000000000000000000000000000000000</div>
-        </div>
-        <div>
-          <label>Constitution (deployment address)</label>
-          <div id="connectionConstitutionAddress" class="addr-box">0x0000000000000000000000000000000000000000</div>
-        </div>
-        <div class="full row">
-          <button id="connectBtn">Connect MetaMask</button>
-          <button id="refreshFeeBtn" class="secondary">Refresh Fee</button>
-        </div>
-        <div class="full hint" id="walletInfo">Not connected</div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Proposal Builder</h2>
-      <div class="grid">
-        <div>
-          <label>Action Count (0-8)</label>
-          <input id="proposalActionCount" type="number" min="0" max="8" value="1" />
-        </div>
-        <div>
-          <label>Proposal Type</label>
-          <select id="proposalType">
-            <option value="1">Native (1)</option>
-            <option value="2">Grantor (2)</option>
-          </select>
-        </div>
-        <div>
-          <label>Eta (uint40, unix sec)</label>
-          <input id="proposalEta" value="0" />
-        </div>
-        <div>
-          <label>Link Protocol (uint8)</label>
-          <input id="proposalLinkProtocol" value="0" />
-        </div>
-        <div>
-          <label>URL bytes32</label>
-          <input id="proposalUrl" value="0x0000000000000000000000000000000000000000000000000000000000000000" />
-        </div>
-        <div class="full">
-          <label>Actions (target/value/calldata)</label>
-          <div id="actionsContainer" class="actions-wrap"></div>
-        </div>
-        <div class="full">
-          <label>Calldata (hex)</label>
-          <textarea id="proposalCalldata" placeholder="Deprecated single-action field"></textarea>
-        </div>
-        <div class="full row">
-          <button id="hashActionBtn" class="secondary">Compute Action Hash</button>
-          <button id="createProposalBtn">Create Proposal</button>
-        </div>
-        <div class="full hint" id="actionHashOut">Action hash: (not computed)</div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Voting</h2>
-      <div class="grid">
-        <div>
-          <label>Proposal ID</label>
-          <input id="voteProposalId" value="1" />
-        </div>
-        <div>
-          <label>Disagree reason (bytes32 hex OR short text)</label>
-          <input id="disagreeReason" value="needs-review" />
-        </div>
-        <div class="full row">
-          <button id="voteYesBtn">Vote Yes</button>
-          <button id="removeVoteBtn" class="secondary">Remove Vote</button>
-          <button id="disagreeBtn" class="secondary">Disagree</button>
+      <div class="card">
+        <h2>Create proposal</h2>
+        <p class="hint">
+          <strong>Native</strong> actions call ecosystem contracts through the DAO (targets must be allowlisted).
+          <strong>Grantor</strong> actions are always calls to the GeniusDao contract (fees, allowlist, <code>daoCall*</code> wrappers).
+          For ownership handoff after <code>Constitution.electNewGrantor(DAO)</code>, use
+          <code>Accept Constitution ownership (daoAcceptGrantorOwnership)</code>.
+        </p>
+        <div class="grid">
+          <div>
+            <label>Proposal type</label>
+            <select id="proposalType">
+              <option value="1">Native — ecosystem contracts</option>
+              <option value="2">Grantor — DAO self-actions</option>
+            </select>
+          </div>
+          <div>
+            <label>Number of actions (0–8)</label>
+            <input id="proposalActionCount" type="number" min="0" max="8" value="1" />
+          </div>
+          <div>
+            <label>Eta (uint40 unix sec, 0 = none)</label>
+            <input id="proposalEta" value="0" />
+          </div>
+          <div>
+            <label>Link protocol (uint8)</label>
+            <input id="proposalLinkProtocol" value="0" />
+          </div>
+          <div class="full">
+            <label>URL (bytes32 hex)</label>
+            <input id="proposalUrl" value="0x0000000000000000000000000000000000000000000000000000000000000000" />
+          </div>
+          <div class="full">
+            <label>Actions</label>
+            <div class="row" style="margin-bottom: 8px">
+              <button type="button" id="addActionBtn" class="secondary btn-sm">Add action</button>
+              <button type="button" id="removeLastActionBtn" class="secondary btn-sm">Remove last</button>
+            </div>
+            <div id="actionsContainer" class="actions-wrap"></div>
+          </div>
+          <div class="full row">
+            <button type="button" id="hashActionBtn" class="secondary">Preview hashes</button>
+            <button type="button" id="createProposalBtn">Submit proposal</button>
+          </div>
+          <div class="full hint" id="actionHashOut">Action hashes: (preview after connect)</div>
         </div>
       </div>
-    </div>
 
-    <div class="card">
-      <h2>Execute Proposal</h2>
-      <div class="grid">
-        <div>
-          <label>Proposal ID</label>
-          <input id="executeProposalId" value="1" />
-        </div>
-        <div></div>
-        <div class="full">
-          <label>Targets JSON array</label>
-          <textarea id="executeTargets">["0x0000000000000000000000000000000000000000"]</textarea>
-        </div>
-        <div class="full">
-          <label>Values JSON array (uint96)</label>
-          <textarea id="executeValues">["0"]</textarea>
-        </div>
-        <div class="full">
-          <label>Datas JSON array (hex calldata)</label>
-          <textarea id="executeDatas">["0x"]</textarea>
-        </div>
-        <div class="full">
-          <button id="executeBtn">Execute</button>
+      <div class="card">
+        <h2>Find proposals (by ID range)</h2>
+        <p class="hint">
+          Enter a range of proposal IDs to scan. Select one to fill voting and execution below.
+        </p>
+        <div class="grid">
+          <div>
+            <label>Start ID</label>
+            <input id="scanStartId" type="number" min="1" value="1" />
+          </div>
+          <div>
+            <label>End ID</label>
+            <input id="scanEndId" type="number" min="1" value="20" />
+          </div>
+          <div class="full row">
+            <button type="button" id="scanProposalsBtn" class="secondary">Scan range</button>
+          </div>
+          <div class="full">
+            <label>Results (click to select)</label>
+            <div id="proposalScanResults" class="scan-list hint">Run a scan after connecting.</div>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="card">
-      <h2>Read / Validate</h2>
-      <div class="grid">
-        <div>
-          <label>Read Proposal ID</label>
-          <input id="readProposalId" value="1" />
-        </div>
-        <div>
-          <label>Native target check address</label>
-          <input id="nativeTargetCheck" placeholder="0x..." />
-        </div>
-        <div class="full row">
-          <button id="readProposalBtn" class="secondary">Read Proposal</button>
-          <button id="checkSeatBtn" class="secondary">Check Seat Active</button>
-          <button id="checkNativeTargetBtn" class="secondary">Check Native Target</button>
+      <div class="card">
+        <h2>Vote</h2>
+        <div class="grid">
+          <div>
+            <label>Proposal ID</label>
+            <input id="voteProposalId" value="1" />
+          </div>
+          <div>
+            <label>Disagree reason (text or bytes32 hex)</label>
+            <input id="disagreeReason" value="needs-review" />
+          </div>
+          <div class="full row">
+            <button type="button" id="voteYesBtn">Vote yes</button>
+            <button type="button" id="removeVoteBtn" class="secondary">Remove vote</button>
+            <button type="button" id="disagreeBtn" class="secondary">Disagree</button>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="card">
-      <h2>Status</h2>
-      <div id="status" class="status">Ready.</div>
-    </div>
+      <div class="card">
+        <h2>Execute proposal</h2>
+        <p class="hint">
+          After a proposal passes, execution uses the same <code>targets</code>, <code>values</code>, and <code>data</code> you
+          used when creating it. This page remembers actions for proposals created in this browser session.
+        </p>
+        <div class="grid">
+          <div>
+            <label>Proposal ID</label>
+            <input id="executeProposalId" value="1" />
+          </div>
+          <div class="full row">
+            <button type="button" id="loadCachedExecuteBtn" class="secondary">
+              Load cached actions for this ID
+            </button>
+            <button type="button" id="executeGuidedBtn">Execute (guided)</button>
+          </div>
+          <div class="full" id="executePreview" class="hint"></div>
+          <details class="advanced full">
+            <summary>Advanced — raw JSON arrays</summary>
+            <div class="grid" style="margin-top: 10px">
+              <div class="full">
+                <label>Targets JSON</label>
+                <textarea id="executeTargets">[]</textarea>
+              </div>
+              <div class="full">
+                <label>Values JSON (uint96)</label>
+                <textarea id="executeValues">[]</textarea>
+              </div>
+              <div class="full">
+                <label>Datas JSON (hex)</label>
+                <textarea id="executeDatas">[]</textarea>
+              </div>
+              <div class="full">
+                <button type="button" id="executeAdvancedBtn" class="secondary">Execute (advanced)</button>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Read / validate</h2>
+        <div class="grid">
+          <div>
+            <label>Proposal ID</label>
+            <input id="readProposalId" value="1" />
+          </div>
+          <div>
+            <label>Native target to check</label>
+            <input id="nativeTargetCheck" placeholder="0x..." />
+          </div>
+          <div class="full row">
+            <button type="button" id="readProposalBtn" class="secondary">Read proposal</button>
+            <button type="button" id="checkSeatBtn" class="secondary">Seat active (you)</button>
+            <button type="button" id="checkNativeTargetBtn" class="secondary">Target allowed?</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Status</h2>
+        <div id="status" class="status">Ready.</div>
+      </div>
+    </main>
 
     <script>
       const ZERO32 = "0x" + "00".repeat(32);
-      const REQUIRED_CHAIN_ID = 31337;
-      const DEFAULT_ADDRESSES = {
-        geniusDao: "0x0000000000000000000000000000000000000000",
-        constitution: "0x0000000000000000000000000000000000000000",
+      const VOTE_WINDOW_SEC = 29 * 24 * 60 * 60;
+      const EXEC_WINDOW_SEC = (29 + 5) * 24 * 60 * 60;
+
+      const GENIUS = {
+        VAULT: "0xbdEd0D2bf404bdcBa897a74E6657f1f12e5C6fb6",
+        TOKEN: "0x72bb9c7ffbE2Ed234e53bc64862DdA6d9fFF333b",
+        NFT_CONTROLLER: "0x7ef8E99980Da5bcEDcF7C10f41E55f759F6A174B",
+        NFT_ROYALTIES: "0x95bD8D42f30351685e96C62EDdc0d0613bf9a87A",
+      };
+
+      const CHAIN_NAMES = {
+        1: "Ethereum Mainnet",
+        11155111: "Sepolia",
+        31337: "localhost",
+        1337: "localhost",
+        5: "Goerli",
+      };
+
+      const REQUIRED_CHAIN_ID = 11155111;
+      const HARDCODED_ADDRESSES = {
+        constitution: "0xA7Cafdbb5AAAbDA037a02C0dFC65EAafAfe45BF6",
+        geniusDao: "0x81550CFC79cdb61135DfC109c165c59E7eE5207D",
       };
 
       const DAO_ABI = [
@@ -276,125 +430,538 @@
         "function actionHash(uint256 proposalId, uint256 index) view returns (bytes32)",
         "function isSeatActive(address seat) view returns (bool)",
         "function isNativeTargetAllowed(address target) view returns (bool)",
-        "event ProposalCreated(uint256 indexed proposalId,address indexed proposer,uint40 eta,uint40 expiresOn,uint8 actionCount,uint8 linkProtocol,bytes32 url)"
+        "function daoSetProposalFee(address token, uint96 amount)",
+        "function daoSetNativeTargetAllowed(address target, bool allowed)",
+        "function daoCallVault(bytes data)",
+        "function daoCallGeniusToken(bytes data)",
+        "function daoCallNftController(bytes data)",
+        "function daoCallNftRoyalties(bytes data)",
+        "function daoCallAnyContract(address target, uint96 value, bytes data)",
+        "function daoAcceptGrantorOwnership(address grantor)",
+        "function acceptGrantorship(bytes32[] proof, uint128 allowance, uint128 firstDay)",
+        "event ProposalCreated(uint256 indexed proposalId,address indexed proposer,uint40 eta,uint40 expiresOn,uint8 actionCount,uint8 linkProtocol,bytes32 url)",
+      ];
+
+      const VAULT_IFACE = new ethers.utils.Interface([
+        "function beginCreditIssuance(address token, uint256 initRate)",
+        "function pauseCreditIssuance(address token)",
+        "function resumeCreditIssuance(address token)",
+        "function purgeVault(address beneficiary, uint256 index)",
+      ]);
+      const TOKEN_IFACE = new ethers.utils.Interface([
+        "function changeTreasury(address _treasury)",
+        "function changeGrantor(address _newGrantor)",
+      ]);
+      const NFT_IFACE = new ethers.utils.Interface([
+        "function newEdition(address _newEdition, uint256 reserved)",
+        "function expelEdition(address _edition)",
+        "function setReserved(address _edition, uint256 _reserved)",
+      ]);
+      const ROY_IFACE = new ethers.utils.Interface([
+        "function setBurnCosts(uint128 _weeklyAmount, uint128 _monthlyAmount)",
+      ]);
+
+      const DAO_IFACE = new ethers.utils.Interface(DAO_ABI);
+
+      const STORAGE_KEY = "geniusDao_pendingExecute_v1";
+      const GRANTOR_DATA = [
+        { account: "0x6FBdc08cAD5f3278411E2B1Aaeb3B640252E680b", allowance: "0", firstDay: 14 },
+        { account: "0xa94fb62e9744d21c5b4ac3a53ddbe6d1fe1fa061", allowance: "0", firstDay: 14 },
+        { account: "0x9aee4D2A8C258f9a79E76E03AA5F434e101513Ca", allowance: "0", firstDay: 14 },
+        { account: "0xfB8A75eD557a9a910DBB2D7bd0AE982e3D340C11", allowance: "0", firstDay: 14 },
+        { account: "0xa7b3ab3bb5726ea77470a6caff2f0497370424ca", allowance: "0", firstDay: 14 },
+        { account: "0x3a3e2a7FB86ebf64611f5c94fE527fE8f10c9aE0", allowance: "0", firstDay: 14 },
+        { account: "0x731adFf6b8D7d90bD40ECC516e4f21b3CB7B578e", allowance: "0", firstDay: 14 },
+        { account: "0x4E854287a2A13740ba04294C6e00401793390E03", allowance: "0", firstDay: 14 },
+        { account: "0xcdd6cf7c098531800f050eddea1ccd5316cce70c", allowance: "1041350000000000000", firstDay: 0 },
+        { account: "0xbe56a9c2af057e37e27a7dcd401e9f9e68b6692b", allowance: "8000000000000000000000", firstDay: 0 },
+        { account: "0x96F05E6B1F7DCdaaF490b18c7878DC0DD628D409", allowance: "7500000000000000000000", firstDay: 0 },
+        { account: "0x278546Ab7675e8298a4def41461C24b4867A231c", allowance: "7000000000000000000000", firstDay: 0 },
+        { account: "0xF0ef1f9ea5a37a3C8C1f8d61A6b8CB1E86B94158", allowance: "6500000000000000000000", firstDay: 0 },
+        { account: "0x5785E3D6e289aCeF79B68490A183d3Cec7b6552b", allowance: "6000000000000000000000", firstDay: 0 },
+        { account: "0x8218641D5359DC6e999D07B6BcE14fB5A207AcE5", allowance: "5500000000000000000000", firstDay: 0 },
+        { account: "0x421c55331AfE0AfAD26b4152d2e8c1baf4467D49", allowance: "5000000000000000000000", firstDay: 0 },
       ];
 
       let provider;
       let signer;
       let dao;
       let account;
-      let currentDaoAddress = DEFAULT_ADDRESSES.geniusDao;
-      let currentConstitutionAddress = DEFAULT_ADDRESSES.constitution;
+      let currentDaoAddress = HARDCODED_ADDRESSES.geniusDao;
+      let currentConstitutionAddress = HARDCODED_ADDRESSES.constitution;
+      let selectedScanProposalId = null;
+      let guidedExecutePayload = null;
+      let grantorRows = GRANTOR_DATA.map((g) => ({
+        account: String(g.account).toLowerCase(),
+        allowance: String(g.allowance).replace(/,/g, ""),
+        firstDay: Number(g.firstDay),
+      }));
 
       const $ = (id) => document.getElementById(id);
       const statusEl = $("status");
       const actionsContainer = $("actionsContainer");
+      const grantorAcceptStatusEl = $("grantorAcceptStatus");
+
+      function shortAddr(a) {
+        if (!a || a === ethers.constants.AddressZero) return "—";
+        return `${a.slice(0, 6)}…${a.slice(-4)}`;
+      }
+
+      function updateNavAddresses() {
+        $("navDaoAddr").textContent = shortAddr(currentDaoAddress);
+        $("navConstAddr").textContent = shortAddr(currentConstitutionAddress);
+        $("navDaoAddr").title = currentDaoAddress;
+        $("navConstAddr").title = currentConstitutionAddress;
+      }
+
+      function chainLabel(chainId) {
+        const n = ethers.BigNumber.isBigNumber(chainId)
+          ? chainId.toNumber()
+          : Number(chainId);
+        return CHAIN_NAMES[n] || `chainId ${n}`;
+      }
+
+      function updateNavChain(chainId, extra) {
+        const base = chainId != null ? `Chain: ${chainLabel(chainId)}` : "Chain: —";
+        $("navChainLabel").textContent = extra ? `${base} · ${extra}` : base;
+      }
+
+      function parseProposalMeta(meta) {
+        const m = ethers.BigNumber.from(meta).toNumber();
+        return {
+          actionCount: m & 0x0f,
+          executed: (m & 0x10) !== 0,
+          proposalType: m >> 5,
+        };
+      }
+
+      function proposalStatusLine(p, nowSec) {
+        const meta = parseProposalMeta(p.meta);
+        const created = p.createdOn.toNumber();
+        const voteDeadline = created + VOTE_WINDOW_SEC;
+        const execDeadline = created + EXEC_WINDOW_SEC;
+        const parts = [];
+        parts.push(`type=${meta.proposalType === 2 ? "Grantor" : "Native"}`);
+        parts.push(`actions=${meta.actionCount}`);
+        parts.push(`approvals=${p.approvals}`);
+        parts.push(meta.executed ? "EXECUTED" : "not executed");
+        if (!meta.executed) {
+          if (nowSec <= voteDeadline) parts.push("voting open");
+          else parts.push("voting closed");
+          if (nowSec <= execDeadline) parts.push("exec window open");
+          else parts.push("exec window ended");
+        }
+        return parts.join(" · ");
+      }
+
+      function loadPendingStore() {
+        try {
+          return JSON.parse(sessionStorage.getItem(STORAGE_KEY) || "{}");
+        } catch {
+          return {};
+        }
+      }
+
+      function savePendingExecute(proposalId, payload) {
+        const id = String(proposalId);
+        const all = loadPendingStore();
+        all[id] = {
+          targets: payload.targets,
+          values: payload.values.map((v) => v.toString()),
+          datas: payload.datas,
+          savedAt: Date.now(),
+        };
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+      }
+
+      function getPendingExecute(proposalId) {
+        const raw = loadPendingStore()[String(proposalId)];
+        if (!raw) return null;
+        return {
+          targets: raw.targets,
+          values: raw.values,
+          datas: raw.datas,
+        };
+      }
+
+      function grantorActionOptions() {
+        return [
+          { value: "G_FEE", label: "Set proposal fee (daoSetProposalFee)" },
+          { value: "G_ALLOW", label: "Allow/disallow native target (daoSetNativeTargetAllowed)" },
+          {
+            value: "G_ACCEPT_OWNERSHIP",
+            label: "Accept Constitution ownership (daoAcceptGrantorOwnership)",
+          },
+          { value: "G_VAULT", label: "Call Vault via DAO (daoCallVault)" },
+          { value: "G_TOKEN", label: "Call Genius token via DAO (daoCallGeniusToken)" },
+          { value: "G_NFT", label: "Call NFT controller via DAO (daoCallNftController)" },
+          { value: "G_ROY", label: "Call NFT royalties via DAO (daoCallNftRoyalties)" },
+        ];
+      }
+
+      function nativeActionOptions() {
+        return [
+          { value: "N_VAULT", label: "Vault — direct call (begin/pause/resume/purge)" },
+          { value: "N_TOKEN", label: "Genius token — direct call" },
+          { value: "N_NFT", label: "NFT controller — direct call" },
+          { value: "N_ROY", label: "NFT royalties — direct call" },
+          { value: "N_CUSTOM", label: "Advanced — custom target / value / calldata" },
+        ];
+      }
+
+      function subMethodOptionsForGrantor(kind) {
+        if (kind === "G_VAULT") {
+          return [
+            { v: "beginCreditIssuance", label: "beginCreditIssuance(token, initRate)" },
+            { v: "pauseCreditIssuance", label: "pauseCreditIssuance(token)" },
+            { v: "resumeCreditIssuance", label: "resumeCreditIssuance(token)" },
+            { v: "purgeVault", label: "purgeVault(beneficiary, index)" },
+            { v: "custom", label: "Custom calldata (hex)" },
+          ];
+        }
+        if (kind === "G_TOKEN") {
+          return [
+            { v: "changeTreasury", label: "changeTreasury(treasury)" },
+            { v: "changeGrantor", label: "changeGrantor(newGrantor)" },
+            { v: "custom", label: "Custom calldata (hex)" },
+          ];
+        }
+        if (kind === "G_NFT") {
+          return [
+            { v: "newEdition", label: "newEdition(edition, reserved)" },
+            { v: "expelEdition", label: "expelEdition(edition)" },
+            { v: "setReserved", label: "setReserved(edition, reserved)" },
+            { v: "custom", label: "Custom calldata (hex)" },
+          ];
+        }
+        if (kind === "G_ROY") {
+          return [
+            { v: "setBurnCosts", label: "setBurnCosts(weekly, monthly)" },
+            { v: "custom", label: "Custom calldata (hex)" },
+          ];
+        }
+        return [];
+      }
+
+      function buildParamFieldsHTML(kind, proposalType) {
+        const isG = proposalType === 2;
+        const subOpts = isG ? subMethodOptionsForGrantor(kind) : subMethodOptionsForGrantor(kind.replace("N_", "G_"));
+        let html = "";
+
+        if (kind === "G_FEE") {
+          html += `<label>Fee token (0x0 = ETH)</label><input class="p-feeToken" placeholder="0x0000000000000000000000000000000000000000" />`;
+          html += `<label>Fee amount (wei or token units)</label><input class="p-feeAmount" placeholder="20000000000000000" />`;
+        } else if (kind === "G_ALLOW") {
+          html += `<label>Target contract</label><input class="p-allowTarget" placeholder="0x..." />`;
+          html += `<label><input type="checkbox" class="p-allowBool" checked /> Allowed</label>`;
+        } else if (kind === "G_ACCEPT_OWNERSHIP") {
+          html += `<label>Constitution address</label><input class="p-acceptGrantor" value="${currentConstitutionAddress}" />`;
+        } else if (["G_VAULT", "G_TOKEN", "G_NFT", "G_ROY"].includes(kind)) {
+          html += `<label>Method</label><select class="p-sub">${subOpts
+            .map((o) => `<option value="${o.v}">${o.label}</option>`)
+            .join("")}</select>`;
+          html += `<div class="p-sub-params"></div>`;
+        } else if (kind === "N_CUSTOM") {
+          html += `<label>Target</label><input class="p-customTarget" placeholder="0x..." />`;
+          html += `<label>Value (uint96)</label><input class="p-customValue" value="0" />`;
+          html += `<label>Calldata (hex)</label><textarea class="p-customData" placeholder="0x"></textarea>`;
+        }
+        return html;
+      }
+
+      function fillSubParams(container, kind, sub) {
+        const box = container.querySelector(".p-sub-params");
+        if (!box) return;
+        let h = "";
+        if (kind === "G_VAULT" || kind === "N_VAULT") {
+          if (sub === "beginCreditIssuance") {
+            h += `<label>Token</label><input class="sp-token" placeholder="0x..." />`;
+            h += `<label>Init rate (uint256)</label><input class="sp-rate" value="0" />`;
+          } else if (sub === "pauseCreditIssuance" || sub === "resumeCreditIssuance") {
+            h += `<label>Token</label><input class="sp-token" placeholder="0x..." />`;
+          } else if (sub === "purgeVault") {
+            h += `<label>Beneficiary</label><input class="sp-ben" placeholder="0x..." />`;
+            h += `<label>Index (uint256)</label><input class="sp-idx" value="0" />`;
+          } else if (sub === "custom") {
+            h += `<label>Inner calldata (hex)</label><textarea class="sp-hex" placeholder="0x"></textarea>`;
+          }
+        } else if (kind === "G_TOKEN" || kind === "N_TOKEN") {
+          if (sub === "changeTreasury") {
+            h += `<label>Treasury</label><input class="sp-addr" placeholder="0x..." />`;
+          } else if (sub === "changeGrantor") {
+            h += `<label>New grantor</label><input class="sp-addr" placeholder="0x..." />`;
+          } else if (sub === "custom") {
+            h += `<label>Inner calldata (hex)</label><textarea class="sp-hex" placeholder="0x"></textarea>`;
+          }
+        } else if (kind === "G_NFT" || kind === "N_NFT") {
+          if (sub === "newEdition") {
+            h += `<label>Edition address</label><input class="sp-addr" placeholder="0x..." />`;
+            h += `<label>Reserved (uint256)</label><input class="sp-u" value="0" />`;
+          } else if (sub === "expelEdition") {
+            h += `<label>Edition address</label><input class="sp-addr" placeholder="0x..." />`;
+          } else if (sub === "setReserved") {
+            h += `<label>Edition address</label><input class="sp-addr" placeholder="0x..." />`;
+            h += `<label>Reserved (uint256)</label><input class="sp-u" value="0" />`;
+          } else if (sub === "custom") {
+            h += `<label>Inner calldata (hex)</label><textarea class="sp-hex" placeholder="0x"></textarea>`;
+          }
+        } else if (kind === "G_ROY" || kind === "N_ROY") {
+          if (sub === "setBurnCosts") {
+            h += `<label>Weekly amount (uint128)</label><input class="sp-w" value="0" />`;
+            h += `<label>Monthly amount (uint128)</label><input class="sp-m" value="0" />`;
+          } else if (sub === "custom") {
+            h += `<label>Inner calldata (hex)</label><textarea class="sp-hex" placeholder="0x"></textarea>`;
+          }
+        }
+        box.innerHTML = h;
+      }
+
+      function encodeInnerData(kind, card) {
+        const subSel = card.querySelector(".p-sub");
+        const sub = subSel ? subSel.value : "";
+
+        if (kind === "G_VAULT" || kind === "N_VAULT") {
+          if (sub === "beginCreditIssuance") {
+            const token = card.querySelector(".sp-token").value.trim();
+            const rate = card.querySelector(".sp-rate").value.trim();
+            requireAddress(token, "token");
+            return VAULT_IFACE.encodeFunctionData("beginCreditIssuance", [token, rate]);
+          }
+          if (sub === "pauseCreditIssuance") {
+            const token = card.querySelector(".sp-token").value.trim();
+            requireAddress(token, "token");
+            return VAULT_IFACE.encodeFunctionData("pauseCreditIssuance", [token]);
+          }
+          if (sub === "resumeCreditIssuance") {
+            const token = card.querySelector(".sp-token").value.trim();
+            requireAddress(token, "token");
+            return VAULT_IFACE.encodeFunctionData("resumeCreditIssuance", [token]);
+          }
+          if (sub === "purgeVault") {
+            const ben = card.querySelector(".sp-ben").value.trim();
+            const idx = card.querySelector(".sp-idx").value.trim();
+            requireAddress(ben, "beneficiary");
+            return VAULT_IFACE.encodeFunctionData("purgeVault", [ben, idx]);
+          }
+          if (sub === "custom") {
+            const hex = card.querySelector(".sp-hex").value.trim();
+            requireHexData(hex, "inner calldata");
+            return hex;
+          }
+        }
+        if (kind === "G_TOKEN" || kind === "N_TOKEN") {
+          if (sub === "changeTreasury") {
+            const a = card.querySelector(".sp-addr").value.trim();
+            requireAddress(a, "treasury");
+            return TOKEN_IFACE.encodeFunctionData("changeTreasury", [a]);
+          }
+          if (sub === "changeGrantor") {
+            const a = card.querySelector(".sp-addr").value.trim();
+            requireAddress(a, "grantor");
+            return TOKEN_IFACE.encodeFunctionData("changeGrantor", [a]);
+          }
+          if (sub === "custom") {
+            const hex = card.querySelector(".sp-hex").value.trim();
+            requireHexData(hex, "inner calldata");
+            return hex;
+          }
+        }
+        if (kind === "G_NFT" || kind === "N_NFT") {
+          if (sub === "newEdition") {
+            const a = card.querySelector(".sp-addr").value.trim();
+            const u = card.querySelector(".sp-u").value.trim();
+            requireAddress(a, "edition");
+            return NFT_IFACE.encodeFunctionData("newEdition", [a, u]);
+          }
+          if (sub === "expelEdition") {
+            const a = card.querySelector(".sp-addr").value.trim();
+            requireAddress(a, "edition");
+            return NFT_IFACE.encodeFunctionData("expelEdition", [a]);
+          }
+          if (sub === "setReserved") {
+            const a = card.querySelector(".sp-addr").value.trim();
+            const u = card.querySelector(".sp-u").value.trim();
+            requireAddress(a, "edition");
+            return NFT_IFACE.encodeFunctionData("setReserved", [a, u]);
+          }
+          if (sub === "custom") {
+            const hex = card.querySelector(".sp-hex").value.trim();
+            requireHexData(hex, "inner calldata");
+            return hex;
+          }
+        }
+        if (kind === "G_ROY" || kind === "N_ROY") {
+          if (sub === "setBurnCosts") {
+            const w = card.querySelector(".sp-w").value.trim();
+            const m = card.querySelector(".sp-m").value.trim();
+            return ROY_IFACE.encodeFunctionData("setBurnCosts", [w, m]);
+          }
+          if (sub === "custom") {
+            const hex = card.querySelector(".sp-hex").value.trim();
+            requireHexData(hex, "inner calldata");
+            return hex;
+          }
+        }
+        throw new Error("Unsupported action encoding");
+      }
+
+      function readActionFromCard(card, proposalType) {
+        const kind = card.querySelector(".act-kind").value;
+        const isGrantor = proposalType === 2;
+
+        if (isGrantor) {
+          const dao = String(currentDaoAddress || "").trim();
+          requireAddress(dao, "GeniusDao");
+
+          if (kind === "G_FEE") {
+            let token = card.querySelector(".p-feeToken").value.trim();
+            const amount = card.querySelector(".p-feeAmount").value.trim();
+            if (!token) token = ethers.constants.AddressZero;
+            requireAddress(token, "fee token");
+            const data = DAO_IFACE.encodeFunctionData("daoSetProposalFee", [token, amount]);
+            return { target: dao, value: "0", data };
+          }
+          if (kind === "G_ALLOW") {
+            const target = card.querySelector(".p-allowTarget").value.trim();
+            const allowed = card.querySelector(".p-allowBool").checked;
+            requireAddress(target, "allow target");
+            const data = DAO_IFACE.encodeFunctionData("daoSetNativeTargetAllowed", [target, allowed]);
+            return { target: dao, value: "0", data };
+          }
+          if (kind === "G_ACCEPT_OWNERSHIP") {
+            const grantor = card.querySelector(".p-acceptGrantor").value.trim();
+            requireAddress(grantor, "constitution");
+            const data = DAO_IFACE.encodeFunctionData("daoAcceptGrantorOwnership", [grantor]);
+            return { target: dao, value: "0", data };
+          }
+          if (["G_VAULT", "G_TOKEN", "G_NFT", "G_ROY"].includes(kind)) {
+            const inner = encodeInnerData(kind, card);
+            let fn = "daoCallVault";
+            if (kind === "G_TOKEN") fn = "daoCallGeniusToken";
+            if (kind === "G_NFT") fn = "daoCallNftController";
+            if (kind === "G_ROY") fn = "daoCallNftRoyalties";
+            const data = DAO_IFACE.encodeFunctionData(fn, [inner]);
+            return { target: dao, value: "0", data };
+          }
+          throw new Error("Unknown grantor action");
+        }
+
+        if (kind === "N_CUSTOM") {
+          const target = card.querySelector(".p-customTarget").value.trim();
+          const value = card.querySelector(".p-customValue").value.trim();
+          const data = card.querySelector(".p-customData").value.trim();
+          requireAddress(target, "target");
+          requireHexData(data, "calldata");
+          return { target, value, data };
+        }
+
+        const inner = encodeInnerData(kind, card);
+        let target = GENIUS.VAULT;
+        if (kind === "N_TOKEN") target = GENIUS.TOKEN;
+        if (kind === "N_NFT") target = GENIUS.NFT_CONTROLLER;
+        if (kind === "N_ROY") target = GENIUS.NFT_ROYALTIES;
+        return { target, value: "0", data: inner };
+      }
+
+      function attachCardListeners(card) {
+        const kindSel = card.querySelector(".act-kind");
+        const proposalType = Number($("proposalType").value);
+
+        const refresh = () => {
+          const kind = kindSel.value;
+          const params = card.querySelector(".act-params");
+          params.innerHTML = buildParamFieldsHTML(kind, proposalType);
+          if (card.querySelector(".p-sub")) {
+            fillSubParams(card, kind, card.querySelector(".p-sub").value);
+            card.querySelector(".p-sub").addEventListener("change", () => {
+              fillSubParams(card, kind, card.querySelector(".p-sub").value);
+              updateActionPreview(card);
+            });
+          }
+          params.querySelectorAll("input,textarea,select").forEach((el) => {
+            el.addEventListener("input", () => updateActionPreview(card));
+            el.addEventListener("change", () => updateActionPreview(card));
+          });
+          updateActionPreview(card);
+        };
+
+        kindSel.addEventListener("change", refresh);
+        refresh();
+      }
+
+      async function updateActionPreview(card) {
+        const prev = card.querySelector(".action-preview");
+        try {
+          const proposalType = Number($("proposalType").value);
+          const a = readActionFromCard(card, proposalType);
+          let hash = "(connect to compute hash)";
+          if (dao) {
+            hash = await dao.hashAction(a.target, a.value, a.data);
+          }
+          prev.textContent = `target=${a.target}\nvalue=${a.value}\ndata=${a.data.slice(0, 66)}…\nhash=${hash}`;
+        } catch (e) {
+          prev.textContent = `Preview: ${e.message || e}`;
+        }
+      }
 
       function buildActionsInputs(count) {
         actionsContainer.innerHTML = "";
+        const proposalType = Number($("proposalType").value);
+        const opts =
+          proposalType === 2
+            ? grantorActionOptions()
+            : nativeActionOptions();
+
         for (let i = 0; i < count; i++) {
           const card = document.createElement("div");
           card.className = "action-card";
+          card.dataset.index = String(i);
           card.innerHTML = `
-            <div><strong>Action ${i + 1}</strong></div>
-            <label>Target</label>
-            <input id="proposalTarget_${i}" placeholder="0x..." />
-            <label>Value (uint96)</label>
-            <input id="proposalValue_${i}" value="0" />
-            <label>Calldata (hex)</label>
-            <textarea id="proposalCalldata_${i}" placeholder="0x..."></textarea>
+            <div class="full"><strong>Action ${i + 1}</strong></div>
+            <label>What to do</label>
+            <select class="act-kind">
+              ${opts.map((o) => `<option value="${o.value}">${o.label}</option>`).join("")}
+            </select>
+            <div class="act-params"></div>
+            <div class="action-preview hint"></div>
           `;
           actionsContainer.appendChild(card);
-        }
-        syncProposalTypeTargetMode();
-      }
-
-      function isGrantorProposalTypeSelected() {
-        return String($("proposalType").value || "") === "2";
-      }
-
-      function syncProposalTypeTargetMode() {
-        const count = Number($("proposalActionCount").value || 0);
-        const lockToDao = isGrantorProposalTypeSelected();
-        for (let i = 0; i < count; i++) {
-          const targetInput = $(`proposalTarget_${i}`);
-          if (!targetInput) continue;
-          if (lockToDao) {
-            targetInput.value = currentDaoAddress;
-            targetInput.disabled = true;
-            targetInput.title = "Grantor proposals are locked to GeniusDao target";
-          } else {
-            targetInput.disabled = false;
-            targetInput.title = "";
-          }
+          attachCardListeners(card);
         }
       }
 
       function readActionsFromUI() {
         const count = Number($("proposalActionCount").value || 0);
         if (!Number.isInteger(count) || count < 0 || count > 8) {
-          throw new Error("Action count must be an integer between 0 and 8");
+          throw new Error("Action count must be 0–8");
         }
+        const proposalType = Number($("proposalType").value);
+        const cards = actionsContainer.querySelectorAll(".action-card");
+        if (cards.length !== count) throw new Error("UI out of sync; change action count again");
         const actions = [];
-        for (let i = 0; i < count; i++) {
-          const target = $(`proposalTarget_${i}`).value.trim();
-          const value = $(`proposalValue_${i}`).value.trim();
-          const data = $(`proposalCalldata_${i}`).value.trim();
-          requireAddress(target, `Action ${i + 1} target`);
-          requireHexData(data, `Action ${i + 1} calldata`);
-          actions.push({ target, value, data });
-        }
+        cards.forEach((card) => {
+          actions.push(readActionFromCard(card, proposalType));
+        });
         return actions;
       }
 
       async function loadDeployedAddresses() {
-        const candidates = [
-          "local-deployment.json",
-          "./local-deployment.json",
-          "/local-deployment.json",
-          "scripts/generated/local-deployment-localhost-31337.json",
-          "./scripts/generated/local-deployment-localhost-31337.json",
-          "/scripts/generated/local-deployment-localhost-31337.json",
-          "scripts/generated/local-deployment-hardhat-31337.json",
-          "./scripts/generated/local-deployment-hardhat-31337.json",
-          "/scripts/generated/local-deployment-hardhat-31337.json"
-        ];
-        for (const p of candidates) {
-          try {
-            const res = await fetch(p, { cache: "no-store" });
-            if (!res.ok) continue;
-            const cfg = await res.json();
-            if (cfg?.geniusDao && cfg?.constitution) {
-              currentDaoAddress = cfg.geniusDao;
-              currentConstitutionAddress = cfg.constitution;
-              $("hardcodedDaoAddress").textContent = cfg.geniusDao;
-              $("hardcodedConstitutionAddress").textContent = cfg.constitution;
-              $("bannerDaoAddress").textContent = cfg.geniusDao;
-              $("bannerConstitutionAddress").textContent = cfg.constitution;
-              $("connectionDaoAddress").textContent = cfg.geniusDao;
-              $("connectionConstitutionAddress").textContent = cfg.constitution;
-              syncProposalTypeTargetMode();
-              setStatus("Loaded deployment config", { source: p, ...cfg });
-              return;
-            }
-          } catch (_) {}
-        }
-        currentDaoAddress = DEFAULT_ADDRESSES.geniusDao;
-        currentConstitutionAddress = DEFAULT_ADDRESSES.constitution;
-        $("hardcodedDaoAddress").textContent = DEFAULT_ADDRESSES.geniusDao;
-        $("hardcodedConstitutionAddress").textContent = DEFAULT_ADDRESSES.constitution;
-        $("bannerDaoAddress").textContent = DEFAULT_ADDRESSES.geniusDao;
-        $("bannerConstitutionAddress").textContent = DEFAULT_ADDRESSES.constitution;
-        $("connectionDaoAddress").textContent = DEFAULT_ADDRESSES.geniusDao;
-        $("connectionConstitutionAddress").textContent = DEFAULT_ADDRESSES.constitution;
-        syncProposalTypeTargetMode();
-        setStatus("Deployment config not found; using fallback hardcoded defaults.", {
-          candidates
+        currentDaoAddress = HARDCODED_ADDRESSES.geniusDao;
+        currentConstitutionAddress = HARDCODED_ADDRESSES.constitution;
+        updateNavAddresses();
+        setStatus("Using hardcoded Sepolia addresses.", {
+          chainIdRequired: REQUIRED_CHAIN_ID,
+          geniusDao: currentDaoAddress,
+          constitution: currentConstitutionAddress,
         });
       }
 
       function setStatus(msg, obj) {
         statusEl.textContent = obj ? `${msg}\n${JSON.stringify(obj, null, 2)}` : msg;
+      }
+
+      function setGrantorAcceptStatus(msg, obj) {
+        grantorAcceptStatusEl.textContent = obj ? `${msg}\n${JSON.stringify(obj, null, 2)}` : msg;
       }
 
       function parseReasonToBytes32(input) {
@@ -410,6 +977,73 @@
         if (!ethers.utils.isHexString(v)) throw new Error(`${name} must be hex data`);
       }
 
+      function grantorLeaf(row) {
+        return ethers.utils.keccak256(
+          ethers.utils.defaultAbiCoder.encode(
+            ["address", "uint128", "uint128"],
+            [row.account, row.allowance, row.firstDay]
+          )
+        );
+      }
+
+      function hashPairSorted(a, b) {
+        const aa = ethers.utils.arrayify(a);
+        const bb = ethers.utils.arrayify(b);
+        const [left, right] =
+          ethers.BigNumber.from(a).lte(ethers.BigNumber.from(b)) ? [aa, bb] : [bb, aa];
+        return ethers.utils.keccak256(ethers.utils.concat([left, right]));
+      }
+
+      function buildGrantorProofByIndex(index, leaves) {
+        let proof = [];
+        let level = leaves.slice();
+        let idx = index;
+        while (level.length > 1) {
+          const isRightNode = idx % 2 === 1;
+          const pairIndex = isRightNode ? idx - 1 : idx + 1;
+          const sibling = pairIndex < level.length ? level[pairIndex] : level[idx];
+          proof.push(sibling);
+
+          const nextLevel = [];
+          for (let i = 0; i < level.length; i += 2) {
+            const left = level[i];
+            const right = i + 1 < level.length ? level[i + 1] : left;
+            nextLevel.push(hashPairSorted(left, right));
+          }
+          idx = Math.floor(idx / 2);
+          level = nextLevel;
+        }
+        return proof;
+      }
+
+      function findGrantorDataForWallet(walletAddress) {
+        const who = String(walletAddress || "").toLowerCase();
+        const rows = grantorRows;
+        const idx = rows.findIndex((g) => g.account === who);
+        if (idx < 0) return null;
+        const leaves = rows.map(grantorLeaf);
+        const proof = buildGrantorProofByIndex(idx, leaves);
+        return {
+          row: rows[idx],
+          proof,
+          leaf: leaves[idx],
+        };
+      }
+
+      function refreshGrantorAcceptPreview() {
+        if (!account) {
+          $("grantorAcceptPreview").textContent = "Preview: connect wallet to check grantor dataset.";
+          return;
+        }
+        const found = findGrantorDataForWallet(account);
+        if (!found) {
+          $("grantorAcceptPreview").textContent = `Wallet ${account} is not in grantor dataset.`;
+          return;
+        }
+        $("grantorAcceptPreview").textContent =
+          `Wallet found. allowance=${found.row.allowance}, firstDay=${found.row.firstDay}, proofItems=${found.proof.length}`;
+      }
+
       function parseJsonArray(text, name) {
         let parsed;
         try {
@@ -423,7 +1057,11 @@
 
       async function ensureConnected() {
         if (!window.ethereum) throw new Error("MetaMask not found");
-        if (!dao) throw new Error("Connect MetaMask first");
+        if (!dao) throw new Error("Connect wallet first");
+        const net = await provider.getNetwork();
+        if (Number(net.chainId) !== REQUIRED_CHAIN_ID) {
+          throw new Error(`Wrong network. Switch MetaMask to Sepolia (${REQUIRED_CHAIN_ID}).`);
+        }
       }
 
       async function connect() {
@@ -434,14 +1072,54 @@
         account = await signer.getAddress();
         const network = await provider.getNetwork();
 
+        if (Number(network.chainId) !== REQUIRED_CHAIN_ID) {
+          updateNavChain(network.chainId, "Sepolia required");
+          throw new Error(`Wrong network. Please switch to Sepolia (${REQUIRED_CHAIN_ID}).`);
+        }
+
         const daoAddress = String(currentDaoAddress || "").trim();
-        requireAddress(daoAddress, "GeniusDao");
+        if (!ethers.utils.isAddress(daoAddress) || daoAddress === ethers.constants.AddressZero) {
+          throw new Error("GeniusDao hardcoded address is missing or invalid.");
+        }
         dao = new ethers.Contract(daoAddress, DAO_ABI, signer);
 
-        $("walletInfo").textContent =
-          `Connected: ${account} | chainId: ${network.chainId}` +
-          (network.chainId !== REQUIRED_CHAIN_ID ? " (expected localhost 31337)" : "");
-        setStatus("Connected.");
+        $("walletInfo").textContent = `Wallet: ${shortAddr(account)} (${account})`;
+        updateNavChain(network.chainId);
+        refreshGrantorAcceptPreview();
+        setStatus("Connected.", { account, dao: daoAddress });
+        buildActionsInputs(Number($("proposalActionCount").value || 0));
+      }
+
+      async function acceptGrantorshipForConnectedWallet() {
+        await ensureConnected();
+        const found = findGrantorDataForWallet(account);
+        if (!found) {
+          const message = `Wallet not in grantor data: ${account}`;
+          setGrantorAcceptStatus("Grantorship lookup failed", { message });
+          throw new Error(message);
+        }
+
+        setGrantorAcceptStatus("Submitting acceptGrantorship transaction...", {
+          wallet: account,
+          allowance: found.row.allowance,
+          firstDay: found.row.firstDay,
+          proofLength: found.proof.length,
+        });
+
+        const tx = await dao.acceptGrantorship(
+          found.proof,
+          found.row.allowance,
+          found.row.firstDay
+        );
+        setGrantorAcceptStatus("Transaction submitted", { txHash: tx.hash });
+        await tx.wait();
+
+        setGrantorAcceptStatus("Grantorship accepted", {
+          wallet: account,
+          txHash: tx.hash,
+          allowance: found.row.allowance,
+          firstDay: found.row.firstDay,
+        });
       }
 
       async function refreshFee() {
@@ -458,7 +1136,7 @@
           hashes.push(await dao.hashAction(a.target, a.value, a.data));
         }
         $("actionHashOut").textContent = `Action hashes: ${JSON.stringify(hashes)}`;
-        setStatus("Computed action hash(es).", { count: hashes.length, hashes });
+        setStatus("Preview hashes", { count: hashes.length, hashes });
       }
 
       async function createProposal() {
@@ -474,7 +1152,7 @@
           eta: $("proposalEta").value.trim() || "0",
           linkProtocol: $("proposalLinkProtocol").value.trim() || "0",
           url: $("proposalUrl").value.trim() || ZERO32,
-          proposalType: $("proposalType").value.trim()
+          proposalType: $("proposalType").value.trim(),
         };
         if (!ethers.utils.isHexString(input.url, 32)) {
           throw new Error("URL must be bytes32 hex");
@@ -485,6 +1163,11 @@
         const overrides = {};
         if (feeToken === ethers.constants.AddressZero) {
           overrides.value = fee;
+        } else {
+          setStatus("Note: ERC20 fee token — ensure GeniusDao is approved to pull fee.", {
+            feeToken,
+            fee: fee.toString(),
+          });
         }
 
         const tx = await dao.propose(actionHashes, input, overrides);
@@ -499,6 +1182,15 @@
             }
           } catch (_) {}
         }
+
+        if (proposalId) {
+          savePendingExecute(proposalId, {
+            targets: actions.map((a) => a.target),
+            values: actions.map((a) => a.value),
+            datas: actions.map((a) => a.data),
+          });
+        }
+
         setStatus("Proposal created", { txHash: tx.hash, proposalId, actionHashes });
       }
 
@@ -527,7 +1219,35 @@
         setStatus("Disagree submitted", { proposalId: id, reason, txHash: tx.hash });
       }
 
-      async function executeProposal() {
+      function applyGuidedPayloadToAdvanced() {
+        if (!guidedExecutePayload) throw new Error("No guided payload — load cached actions or create proposal here");
+        $("executeTargets").value = JSON.stringify(guidedExecutePayload.targets);
+        $("executeValues").value = JSON.stringify(guidedExecutePayload.values);
+        $("executeDatas").value = JSON.stringify(guidedExecutePayload.datas);
+        $("executePreview").textContent = `Loaded ${guidedExecutePayload.targets.length} action(s) for execution.`;
+      }
+
+      async function executeGuided() {
+        await ensureConnected();
+        const id = $("executeProposalId").value.trim();
+        const cached = getPendingExecute(id);
+        if (cached) guidedExecutePayload = cached;
+        if (!guidedExecutePayload) throw new Error("No actions loaded — use “Load cached actions” or Advanced JSON");
+        applyGuidedPayloadToAdvanced();
+        const targets = guidedExecutePayload.targets;
+        const values = guidedExecutePayload.values;
+        const datas = guidedExecutePayload.datas;
+        const tx = await dao.execute(
+          id,
+          targets,
+          values.map((v) => ethers.BigNumber.from(v)),
+          datas
+        );
+        await tx.wait();
+        setStatus("Proposal executed (guided)", { proposalId: id, txHash: tx.hash });
+      }
+
+      async function executeAdvanced() {
         await ensureConnected();
         const id = $("executeProposalId").value.trim();
         const targets = parseJsonArray($("executeTargets").value.trim(), "Targets");
@@ -539,24 +1259,45 @@
         targets.forEach((a, i) => requireAddress(a, `Target[${i}]`));
         datas.forEach((d, i) => requireHexData(d, `Data[${i}]`));
 
-        const tx = await dao.execute(id, targets, values, datas);
+        const tx = await dao.execute(
+          id,
+          targets,
+          values.map((v) => ethers.BigNumber.from(v)),
+          datas
+        );
         await tx.wait();
-        setStatus("Proposal executed", { proposalId: id, txHash: tx.hash });
+        setStatus("Proposal executed (advanced)", { proposalId: id, txHash: tx.hash });
+      }
+
+      function loadCachedExecute() {
+        const id = $("executeProposalId").value.trim();
+        const cached = getPendingExecute(id);
+        if (!cached) {
+          guidedExecutePayload = null;
+          $("executePreview").textContent = "No cached actions for this ID in this browser.";
+          setStatus("No cached execute payload", { proposalId: id });
+          return;
+        }
+        guidedExecutePayload = cached;
+        applyGuidedPayloadToAdvanced();
+        setStatus("Loaded cached execute payload", { proposalId: id, actions: cached.targets.length });
       }
 
       async function readProposal() {
         await ensureConnected();
         const id = $("readProposalId").value.trim();
         const p = await dao.proposal(id);
+        const meta = parseProposalMeta(p.meta);
+        const now = Math.floor(Date.now() / 1000);
         setStatus("Proposal read", {
           proposalId: id,
           proposer: p.proposer,
           createdOn: p.createdOn.toString(),
           eta: p.eta.toString(),
           meta: p.meta,
+          parsedMeta: meta,
           approvals: p.approvals.toString(),
-          linkProtocol: p.linkProtocol,
-          url: p.url
+          status: proposalStatusLine(p, now),
         });
       }
 
@@ -574,6 +1315,47 @@
         setStatus("Native target allowlist check", { target, allowed });
       }
 
+      async function scanProposals() {
+        await ensureConnected();
+        const start = Math.max(1, Number($("scanStartId").value || 1));
+        const end = Math.max(start, Number($("scanEndId").value || start));
+        const box = $("proposalScanResults");
+        box.innerHTML = "";
+        const now = Math.floor(Date.now() / 1000);
+
+        for (let id = start; id <= end; id++) {
+          const p = await dao.proposal(id);
+          if (p.proposer === ethers.constants.AddressZero) continue;
+          const meta = parseProposalMeta(p.meta);
+          const line = `#${id} · ${proposalStatusLine(p, now)}`;
+
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "scan-item";
+          btn.textContent = line;
+          if (String(selectedScanProposalId) === String(id)) btn.classList.add("selected");
+
+          btn.addEventListener("click", () => {
+            selectedScanProposalId = id;
+            $("voteProposalId").value = String(id);
+            $("executeProposalId").value = String(id);
+            $("readProposalId").value = String(id);
+            guidedExecutePayload = getPendingExecute(id);
+            $("executePreview").textContent = guidedExecutePayload
+              ? `Cached ${guidedExecutePayload.targets.length} action(s) for #${id}`
+              : `No cached actions for #${id} — use Advanced JSON if you have calldata.`;
+            box.querySelectorAll(".scan-item").forEach((b) => b.classList.remove("selected"));
+            btn.classList.add("selected");
+            setStatus("Selected proposal", { proposalId: id });
+          });
+
+          box.appendChild(btn);
+        }
+        if (!box.children.length) {
+          box.textContent = "No proposals found in that ID range (empty proposer).";
+        }
+      }
+
       async function run(fn) {
         try {
           await fn();
@@ -582,26 +1364,55 @@
         }
       }
 
-      $("connectBtn").onclick = () => run(connect);
-      $("refreshFeeBtn").onclick = () => run(refreshFee);
+      $("navConnectBtn").onclick = () => run(connect);
+      $("navRefreshFeeBtn").onclick = () => run(refreshFee);
       $("hashActionBtn").onclick = () => run(computeActionHash);
       $("createProposalBtn").onclick = () => run(createProposal);
       $("voteYesBtn").onclick = () => run(voteYes);
       $("removeVoteBtn").onclick = () => run(removeVote);
       $("disagreeBtn").onclick = () => run(disagree);
-      $("executeBtn").onclick = () => run(executeProposal);
+      $("executeGuidedBtn").onclick = () => run(executeGuided);
+      $("executeAdvancedBtn").onclick = () => run(executeAdvanced);
+      $("loadCachedExecuteBtn").onclick = () => run(async () => loadCachedExecute());
       $("readProposalBtn").onclick = () => run(readProposal);
       $("checkSeatBtn").onclick = () => run(checkSeat);
       $("checkNativeTargetBtn").onclick = () => run(checkNativeTarget);
+      $("scanProposalsBtn").onclick = () => run(scanProposals);
+      $("acceptGrantorshipBtn").onclick = () => run(acceptGrantorshipForConnectedWallet);
+
+      $("addActionBtn").onclick = () => {
+        const n = Number($("proposalActionCount").value || 0);
+        if (n >= 8) return;
+        $("proposalActionCount").value = String(n + 1);
+        buildActionsInputs(n + 1);
+      };
+      $("removeLastActionBtn").onclick = () => {
+        const n = Number($("proposalActionCount").value || 0);
+        if (n <= 0) return;
+        $("proposalActionCount").value = String(n - 1);
+        buildActionsInputs(n - 1);
+      };
 
       $("proposalActionCount").addEventListener("input", () => {
         const n = Math.max(0, Math.min(8, Number($("proposalActionCount").value || 0)));
         $("proposalActionCount").value = String(n);
         buildActionsInputs(n);
       });
-      $("proposalType").addEventListener("change", syncProposalTypeTargetMode);
 
+      $("proposalType").addEventListener("change", () => {
+        buildActionsInputs(Number($("proposalActionCount").value || 0));
+      });
+
+      if (window.ethereum) {
+        window.ethereum.on?.("chainChanged", () => {
+          window.location.reload();
+        });
+      }
+
+      updateNavAddresses();
+      updateNavChain(null);
       buildActionsInputs(1);
+      refreshGrantorAcceptPreview();
       loadDeployedAddresses();
     </script>
   </body>
