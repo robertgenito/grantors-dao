@@ -218,6 +218,7 @@
         <p class="hint">
           Uses connected wallet to find your grantor row and auto-build
           <code>proof</code>, <code>allowance</code>, and <code>firstDay</code>.
+          Grantor root: <code id="grantorRootLabel">—</code>
         </p>
         <div class="grid">
           <div class="full row">
@@ -235,19 +236,12 @@
       <div class="card">
         <h2>Create proposal</h2>
         <p class="hint">
-          <strong>Native</strong> actions call ecosystem contracts through the DAO (targets must be allowlisted).
-          <strong>Grantor</strong> actions are always calls to the GeniusDao contract (fees, allowlist, <code>daoCall*</code> wrappers).
-          For ownership handoff after <code>Constitution.electNewGrantor(DAO)</code>, use
-          <code>Accept Constitution ownership (daoAcceptGrantorOwnership)</code>.
+          Simple mode: one row per action using <code>target + function signature + params JSON</code>.
+          Each action is auto-routed by target: DAO self-call (target = GeniusDao),
+          Genius typed dispatcher (Vault / GeniusToken / NFT Controller / NFT Royalties),
+          or generic external call via Constitution.
         </p>
         <div class="grid">
-          <div>
-            <label>Proposal type</label>
-            <select id="proposalType">
-              <option value="1">Native — ecosystem contracts</option>
-              <option value="2">Grantor — DAO self-actions</option>
-            </select>
-          </div>
           <div>
             <label>Number of actions (0–8)</label>
             <input id="proposalActionCount" type="number" min="0" max="8" value="1" />
@@ -281,11 +275,22 @@
       </div>
 
       <div class="card">
-        <h2>Find proposals (by ID range)</h2>
+        <h2>Find proposals</h2>
         <p class="hint">
-          Enter a range of proposal IDs to scan. Select one to fill voting and execution below.
+          You can scan active proposals by event logs (no indexer) or use manual ID range fallback.
         </p>
         <div class="grid">
+          <div>
+            <label>Event scan from block</label>
+            <input id="eventFromBlock" type="number" min="1" value="0" />
+          </div>
+          <div>
+            <label>Event scan to block (0 = latest)</label>
+            <input id="eventToBlock" type="number" min="0" value="0" />
+          </div>
+          <div class="full row">
+            <button type="button" id="scanActiveByEventsBtn">Scan active by events</button>
+          </div>
           <div>
             <label>Start ID</label>
             <input id="scanStartId" type="number" min="1" value="1" />
@@ -371,14 +376,9 @@
             <label>Proposal ID</label>
             <input id="readProposalId" value="1" />
           </div>
-          <div>
-            <label>Native target to check</label>
-            <input id="nativeTargetCheck" placeholder="0x..." />
-          </div>
           <div class="full row">
             <button type="button" id="readProposalBtn" class="secondary">Read proposal</button>
             <button type="button" id="checkSeatBtn" class="secondary">Seat active (you)</button>
-            <button type="button" id="checkNativeTargetBtn" class="secondary">Target allowed?</button>
           </div>
         </div>
       </div>
@@ -412,16 +412,15 @@
       const REQUIRED_CHAIN_ID = 11155111;
       const HARDCODED_ADDRESSES = {
         constitution: "0xA7Cafdbb5AAAbDA037a02C0dFC65EAafAfe45BF6",
-        geniusDao: "0x81550CFC79cdb61135DfC109c165c59E7eE5207D",
+        geniusDao: "0x3404fbC7D98C066cef4434C4121d6660215f3A7c",
+        grantorRoot: "0x2a88f5c0a393725224a8bbc1ff6227b7ad9a5b3dfca8a51f848a25bd09ef64bd",
       };
 
       const DAO_ABI = [
-        "function proposalTypeNative() view returns (uint256)",
-        "function proposalTypeGrantor() view returns (uint256)",
         "function feeToken() view returns (address)",
         "function fee() view returns (uint96)",
         "function hashAction(address target, uint96 value, bytes data) pure returns (bytes32)",
-        "function propose(bytes32[] actionHashes, tuple(uint40 eta,uint8 linkProtocol,bytes32 url,uint256 proposalType) input) payable returns (uint256)",
+        "function propose(bytes32[] actionHashes, tuple(uint40 eta,uint8 linkProtocol,bytes32 url) input) payable returns (uint256)",
         "function voteYes(uint256 proposalId) returns (uint16)",
         "function removeVote(uint256 proposalId) returns (uint16)",
         "function disagree(uint256 proposalId, bytes32 reason)",
@@ -429,9 +428,7 @@
         "function proposal(uint256 proposalId) view returns (tuple(address proposer,uint40 createdOn,uint40 eta,uint8 meta,uint16 approvals,uint8 linkProtocol,bytes32 url))",
         "function actionHash(uint256 proposalId, uint256 index) view returns (bytes32)",
         "function isSeatActive(address seat) view returns (bool)",
-        "function isNativeTargetAllowed(address target) view returns (bool)",
         "function daoSetProposalFee(address token, uint96 amount)",
-        "function daoSetNativeTargetAllowed(address target, bool allowed)",
         "function daoCallVault(bytes data)",
         "function daoCallGeniusToken(bytes data)",
         "function daoCallNftController(bytes data)",
@@ -440,6 +437,7 @@
         "function daoAcceptGrantorOwnership(address grantor)",
         "function acceptGrantorship(bytes32[] proof, uint128 allowance, uint128 firstDay)",
         "event ProposalCreated(uint256 indexed proposalId,address indexed proposer,uint40 eta,uint40 expiresOn,uint8 actionCount,uint8 linkProtocol,bytes32 url)",
+        "event ProposalExecuted(uint256 indexed proposalId)",
       ];
 
       const VAULT_IFACE = new ethers.utils.Interface([
@@ -487,6 +485,7 @@
       let signer;
       let dao;
       let account;
+      let injectedProvider;
       let currentDaoAddress = HARDCODED_ADDRESSES.geniusDao;
       let currentConstitutionAddress = HARDCODED_ADDRESSES.constitution;
       let selectedScanProposalId = null;
@@ -531,7 +530,6 @@
         return {
           actionCount: m & 0x0f,
           executed: (m & 0x10) !== 0,
-          proposalType: m >> 5,
         };
       }
 
@@ -541,7 +539,6 @@
         const voteDeadline = created + VOTE_WINDOW_SEC;
         const execDeadline = created + EXEC_WINDOW_SEC;
         const parts = [];
-        parts.push(`type=${meta.proposalType === 2 ? "Grantor" : "Native"}`);
         parts.push(`actions=${meta.actionCount}`);
         parts.push(`approvals=${p.approvals}`);
         parts.push(meta.executed ? "EXECUTED" : "not executed");
@@ -584,321 +581,96 @@
         };
       }
 
-      function grantorActionOptions() {
-        return [
-          { value: "G_FEE", label: "Set proposal fee (daoSetProposalFee)" },
-          { value: "G_ALLOW", label: "Allow/disallow native target (daoSetNativeTargetAllowed)" },
-          {
-            value: "G_ACCEPT_OWNERSHIP",
-            label: "Accept Constitution ownership (daoAcceptGrantorOwnership)",
-          },
-          { value: "G_VAULT", label: "Call Vault via DAO (daoCallVault)" },
-          { value: "G_TOKEN", label: "Call Genius token via DAO (daoCallGeniusToken)" },
-          { value: "G_NFT", label: "Call NFT controller via DAO (daoCallNftController)" },
-          { value: "G_ROY", label: "Call NFT royalties via DAO (daoCallNftRoyalties)" },
-        ];
+      function parseParamsJson(text, name) {
+        let params;
+        try {
+          params = JSON.parse(text);
+        } catch {
+          throw new Error(`${name} must be valid JSON array`);
+        }
+        if (!Array.isArray(params)) throw new Error(`${name} must be a JSON array`);
+        return params;
       }
 
-      function nativeActionOptions() {
-        return [
-          { value: "N_VAULT", label: "Vault — direct call (begin/pause/resume/purge)" },
-          { value: "N_TOKEN", label: "Genius token — direct call" },
-          { value: "N_NFT", label: "NFT controller — direct call" },
-          { value: "N_ROY", label: "NFT royalties — direct call" },
-          { value: "N_CUSTOM", label: "Advanced — custom target / value / calldata" },
-        ];
+      function normalizeFunctionSignature(signature) {
+        const s = String(signature || "").trim();
+        if (!s) throw new Error("Function signature is required");
+        if (!s.includes("(") || !s.endsWith(")")) {
+          throw new Error("Function signature must look like name(type1,type2)");
+        }
+        return s;
       }
 
-      function subMethodOptionsForGrantor(kind) {
-        if (kind === "G_VAULT") {
-          return [
-            { v: "beginCreditIssuance", label: "beginCreditIssuance(token, initRate)" },
-            { v: "pauseCreditIssuance", label: "pauseCreditIssuance(token)" },
-            { v: "resumeCreditIssuance", label: "resumeCreditIssuance(token)" },
-            { v: "purgeVault", label: "purgeVault(beneficiary, index)" },
-            { v: "custom", label: "Custom calldata (hex)" },
-          ];
+      function encodeActionData(signature, params) {
+        const fnSig = normalizeFunctionSignature(signature);
+        const iface = new ethers.utils.Interface([`function ${fnSig}`]);
+        const fnName = fnSig.split("(")[0].trim();
+        try {
+          return iface.encodeFunctionData(fnName, params);
+        } catch (e) {
+          throw new Error(`Failed to encode ${fnSig}: ${e?.reason || e?.message || e}`);
         }
-        if (kind === "G_TOKEN") {
-          return [
-            { v: "changeTreasury", label: "changeTreasury(treasury)" },
-            { v: "changeGrantor", label: "changeGrantor(newGrantor)" },
-            { v: "custom", label: "Custom calldata (hex)" },
-          ];
-        }
-        if (kind === "G_NFT") {
-          return [
-            { v: "newEdition", label: "newEdition(edition, reserved)" },
-            { v: "expelEdition", label: "expelEdition(edition)" },
-            { v: "setReserved", label: "setReserved(edition, reserved)" },
-            { v: "custom", label: "Custom calldata (hex)" },
-          ];
-        }
-        if (kind === "G_ROY") {
-          return [
-            { v: "setBurnCosts", label: "setBurnCosts(weekly, monthly)" },
-            { v: "custom", label: "Custom calldata (hex)" },
-          ];
-        }
-        return [];
       }
 
-      function buildParamFieldsHTML(kind, proposalType) {
-        const isG = proposalType === 2;
-        const subOpts = isG ? subMethodOptionsForGrantor(kind) : subMethodOptionsForGrantor(kind.replace("N_", "G_"));
-        let html = "";
+      // Known Genius ecosystem contract addresses (must match contracts/AllContracts.sol).
+      const GENIUS_TARGETS = {
+        vault: "0xB6734FfDB8ecd54B919E8a467cDD5D31A1Ed8B76",
+        token: "0xacA2b64C0dd377dEC1e18Bdf8f096be633EbcA94",
+        nftController: "0x8E99AB9D71d6C9031A52C29265c412b9DF9e8B6C",
+        nftRoyalties: "0x86D442Ed0c799DAe88502E6C01a3300f147604a9",
+      };
 
-        if (kind === "G_FEE") {
-          html += `<label>Fee token (0x0 = ETH)</label><input class="p-feeToken" placeholder="0x0000000000000000000000000000000000000000" />`;
-          html += `<label>Fee amount (wei or token units)</label><input class="p-feeAmount" placeholder="20000000000000000" />`;
-        } else if (kind === "G_ALLOW") {
-          html += `<label>Target contract</label><input class="p-allowTarget" placeholder="0x..." />`;
-          html += `<label><input type="checkbox" class="p-allowBool" checked /> Allowed</label>`;
-        } else if (kind === "G_ACCEPT_OWNERSHIP") {
-          html += `<label>Constitution address</label><input class="p-acceptGrantor" value="${currentConstitutionAddress}" />`;
-        } else if (["G_VAULT", "G_TOKEN", "G_NFT", "G_ROY"].includes(kind)) {
-          html += `<label>Method</label><select class="p-sub">${subOpts
-            .map((o) => `<option value="${o.v}">${o.label}</option>`)
-            .join("")}</select>`;
-          html += `<div class="p-sub-params"></div>`;
-        } else if (kind === "N_CUSTOM") {
-          html += `<label>Target</label><input class="p-customTarget" placeholder="0x..." />`;
-          html += `<label>Value (uint96)</label><input class="p-customValue" value="0" />`;
-          html += `<label>Calldata (hex)</label><textarea class="p-customData" placeholder="0x"></textarea>`;
+      function inferRoutingLabel(target, value) {
+        if (!ethers.utils.isAddress(target)) return "—";
+        const t = target.toLowerCase();
+        const dao = String(currentDaoAddress || "").toLowerCase();
+        if (t === dao) return "DAO self-call";
+        const valStr = String(value || "0");
+        const valIsZero = valStr === "0" || valStr === "0x0" || valStr === "";
+        if (valIsZero) {
+          if (t === GENIUS_TARGETS.vault.toLowerCase()) return "Constitution.callVault";
+          if (t === GENIUS_TARGETS.token.toLowerCase()) return "Constitution.callGeniusToken";
+          if (t === GENIUS_TARGETS.nftController.toLowerCase()) return "Constitution.callNftController";
+          if (t === GENIUS_TARGETS.nftRoyalties.toLowerCase()) return "Constitution.callNftRoyalties";
         }
-        return html;
+        return "Constitution.callAnyContract (external)";
       }
 
-      function fillSubParams(container, kind, sub) {
-        const box = container.querySelector(".p-sub-params");
-        if (!box) return;
-        let h = "";
-        if (kind === "G_VAULT" || kind === "N_VAULT") {
-          if (sub === "beginCreditIssuance") {
-            h += `<label>Token</label><input class="sp-token" placeholder="0x..." />`;
-            h += `<label>Init rate (uint256)</label><input class="sp-rate" value="0" />`;
-          } else if (sub === "pauseCreditIssuance" || sub === "resumeCreditIssuance") {
-            h += `<label>Token</label><input class="sp-token" placeholder="0x..." />`;
-          } else if (sub === "purgeVault") {
-            h += `<label>Beneficiary</label><input class="sp-ben" placeholder="0x..." />`;
-            h += `<label>Index (uint256)</label><input class="sp-idx" value="0" />`;
-          } else if (sub === "custom") {
-            h += `<label>Inner calldata (hex)</label><textarea class="sp-hex" placeholder="0x"></textarea>`;
-          }
-        } else if (kind === "G_TOKEN" || kind === "N_TOKEN") {
-          if (sub === "changeTreasury") {
-            h += `<label>Treasury</label><input class="sp-addr" placeholder="0x..." />`;
-          } else if (sub === "changeGrantor") {
-            h += `<label>New grantor</label><input class="sp-addr" placeholder="0x..." />`;
-          } else if (sub === "custom") {
-            h += `<label>Inner calldata (hex)</label><textarea class="sp-hex" placeholder="0x"></textarea>`;
-          }
-        } else if (kind === "G_NFT" || kind === "N_NFT") {
-          if (sub === "newEdition") {
-            h += `<label>Edition address</label><input class="sp-addr" placeholder="0x..." />`;
-            h += `<label>Reserved (uint256)</label><input class="sp-u" value="0" />`;
-          } else if (sub === "expelEdition") {
-            h += `<label>Edition address</label><input class="sp-addr" placeholder="0x..." />`;
-          } else if (sub === "setReserved") {
-            h += `<label>Edition address</label><input class="sp-addr" placeholder="0x..." />`;
-            h += `<label>Reserved (uint256)</label><input class="sp-u" value="0" />`;
-          } else if (sub === "custom") {
-            h += `<label>Inner calldata (hex)</label><textarea class="sp-hex" placeholder="0x"></textarea>`;
-          }
-        } else if (kind === "G_ROY" || kind === "N_ROY") {
-          if (sub === "setBurnCosts") {
-            h += `<label>Weekly amount (uint128)</label><input class="sp-w" value="0" />`;
-            h += `<label>Monthly amount (uint128)</label><input class="sp-m" value="0" />`;
-          } else if (sub === "custom") {
-            h += `<label>Inner calldata (hex)</label><textarea class="sp-hex" placeholder="0x"></textarea>`;
-          }
-        }
-        box.innerHTML = h;
-      }
+      function readActionFromCard(card) {
+        const targetInput = card.querySelector(".p-target");
+        const valueInput = card.querySelector(".p-value");
+        const fnInput = card.querySelector(".p-fn");
+        const paramsInput = card.querySelector(".p-params");
 
-      function encodeInnerData(kind, card) {
-        const subSel = card.querySelector(".p-sub");
-        const sub = subSel ? subSel.value : "";
+        const target = targetInput.value.trim();
+        const value = valueInput.value.trim() || "0";
+        const fnSig = normalizeFunctionSignature(fnInput.value.trim());
+        const params = parseParamsJson(paramsInput.value.trim(), "Params");
 
-        if (kind === "G_VAULT" || kind === "N_VAULT") {
-          if (sub === "beginCreditIssuance") {
-            const token = card.querySelector(".sp-token").value.trim();
-            const rate = card.querySelector(".sp-rate").value.trim();
-            requireAddress(token, "token");
-            return VAULT_IFACE.encodeFunctionData("beginCreditIssuance", [token, rate]);
-          }
-          if (sub === "pauseCreditIssuance") {
-            const token = card.querySelector(".sp-token").value.trim();
-            requireAddress(token, "token");
-            return VAULT_IFACE.encodeFunctionData("pauseCreditIssuance", [token]);
-          }
-          if (sub === "resumeCreditIssuance") {
-            const token = card.querySelector(".sp-token").value.trim();
-            requireAddress(token, "token");
-            return VAULT_IFACE.encodeFunctionData("resumeCreditIssuance", [token]);
-          }
-          if (sub === "purgeVault") {
-            const ben = card.querySelector(".sp-ben").value.trim();
-            const idx = card.querySelector(".sp-idx").value.trim();
-            requireAddress(ben, "beneficiary");
-            return VAULT_IFACE.encodeFunctionData("purgeVault", [ben, idx]);
-          }
-          if (sub === "custom") {
-            const hex = card.querySelector(".sp-hex").value.trim();
-            requireHexData(hex, "inner calldata");
-            return hex;
-          }
-        }
-        if (kind === "G_TOKEN" || kind === "N_TOKEN") {
-          if (sub === "changeTreasury") {
-            const a = card.querySelector(".sp-addr").value.trim();
-            requireAddress(a, "treasury");
-            return TOKEN_IFACE.encodeFunctionData("changeTreasury", [a]);
-          }
-          if (sub === "changeGrantor") {
-            const a = card.querySelector(".sp-addr").value.trim();
-            requireAddress(a, "grantor");
-            return TOKEN_IFACE.encodeFunctionData("changeGrantor", [a]);
-          }
-          if (sub === "custom") {
-            const hex = card.querySelector(".sp-hex").value.trim();
-            requireHexData(hex, "inner calldata");
-            return hex;
-          }
-        }
-        if (kind === "G_NFT" || kind === "N_NFT") {
-          if (sub === "newEdition") {
-            const a = card.querySelector(".sp-addr").value.trim();
-            const u = card.querySelector(".sp-u").value.trim();
-            requireAddress(a, "edition");
-            return NFT_IFACE.encodeFunctionData("newEdition", [a, u]);
-          }
-          if (sub === "expelEdition") {
-            const a = card.querySelector(".sp-addr").value.trim();
-            requireAddress(a, "edition");
-            return NFT_IFACE.encodeFunctionData("expelEdition", [a]);
-          }
-          if (sub === "setReserved") {
-            const a = card.querySelector(".sp-addr").value.trim();
-            const u = card.querySelector(".sp-u").value.trim();
-            requireAddress(a, "edition");
-            return NFT_IFACE.encodeFunctionData("setReserved", [a, u]);
-          }
-          if (sub === "custom") {
-            const hex = card.querySelector(".sp-hex").value.trim();
-            requireHexData(hex, "inner calldata");
-            return hex;
-          }
-        }
-        if (kind === "G_ROY" || kind === "N_ROY") {
-          if (sub === "setBurnCosts") {
-            const w = card.querySelector(".sp-w").value.trim();
-            const m = card.querySelector(".sp-m").value.trim();
-            return ROY_IFACE.encodeFunctionData("setBurnCosts", [w, m]);
-          }
-          if (sub === "custom") {
-            const hex = card.querySelector(".sp-hex").value.trim();
-            requireHexData(hex, "inner calldata");
-            return hex;
-          }
-        }
-        throw new Error("Unsupported action encoding");
-      }
+        requireAddress(target, "Target address");
+        const data = encodeActionData(fnSig, params);
 
-      function readActionFromCard(card, proposalType) {
-        const kind = card.querySelector(".act-kind").value;
-        const isGrantor = proposalType === 2;
-
-        if (isGrantor) {
-          const dao = String(currentDaoAddress || "").trim();
-          requireAddress(dao, "GeniusDao");
-
-          if (kind === "G_FEE") {
-            let token = card.querySelector(".p-feeToken").value.trim();
-            const amount = card.querySelector(".p-feeAmount").value.trim();
-            if (!token) token = ethers.constants.AddressZero;
-            requireAddress(token, "fee token");
-            const data = DAO_IFACE.encodeFunctionData("daoSetProposalFee", [token, amount]);
-            return { target: dao, value: "0", data };
-          }
-          if (kind === "G_ALLOW") {
-            const target = card.querySelector(".p-allowTarget").value.trim();
-            const allowed = card.querySelector(".p-allowBool").checked;
-            requireAddress(target, "allow target");
-            const data = DAO_IFACE.encodeFunctionData("daoSetNativeTargetAllowed", [target, allowed]);
-            return { target: dao, value: "0", data };
-          }
-          if (kind === "G_ACCEPT_OWNERSHIP") {
-            const grantor = card.querySelector(".p-acceptGrantor").value.trim();
-            requireAddress(grantor, "constitution");
-            const data = DAO_IFACE.encodeFunctionData("daoAcceptGrantorOwnership", [grantor]);
-            return { target: dao, value: "0", data };
-          }
-          if (["G_VAULT", "G_TOKEN", "G_NFT", "G_ROY"].includes(kind)) {
-            const inner = encodeInnerData(kind, card);
-            let fn = "daoCallVault";
-            if (kind === "G_TOKEN") fn = "daoCallGeniusToken";
-            if (kind === "G_NFT") fn = "daoCallNftController";
-            if (kind === "G_ROY") fn = "daoCallNftRoyalties";
-            const data = DAO_IFACE.encodeFunctionData(fn, [inner]);
-            return { target: dao, value: "0", data };
-          }
-          throw new Error("Unknown grantor action");
-        }
-
-        if (kind === "N_CUSTOM") {
-          const target = card.querySelector(".p-customTarget").value.trim();
-          const value = card.querySelector(".p-customValue").value.trim();
-          const data = card.querySelector(".p-customData").value.trim();
-          requireAddress(target, "target");
-          requireHexData(data, "calldata");
-          return { target, value, data };
-        }
-
-        const inner = encodeInnerData(kind, card);
-        let target = GENIUS.VAULT;
-        if (kind === "N_TOKEN") target = GENIUS.TOKEN;
-        if (kind === "N_NFT") target = GENIUS.NFT_CONTROLLER;
-        if (kind === "N_ROY") target = GENIUS.NFT_ROYALTIES;
-        return { target, value: "0", data: inner };
+        return { target, value, data };
       }
 
       function attachCardListeners(card) {
-        const kindSel = card.querySelector(".act-kind");
-        const proposalType = Number($("proposalType").value);
-
-        const refresh = () => {
-          const kind = kindSel.value;
-          const params = card.querySelector(".act-params");
-          params.innerHTML = buildParamFieldsHTML(kind, proposalType);
-          if (card.querySelector(".p-sub")) {
-            fillSubParams(card, kind, card.querySelector(".p-sub").value);
-            card.querySelector(".p-sub").addEventListener("change", () => {
-              fillSubParams(card, kind, card.querySelector(".p-sub").value);
-              updateActionPreview(card);
-            });
-          }
-          params.querySelectorAll("input,textarea,select").forEach((el) => {
-            el.addEventListener("input", () => updateActionPreview(card));
-            el.addEventListener("change", () => updateActionPreview(card));
-          });
-          updateActionPreview(card);
-        };
-
-        kindSel.addEventListener("change", refresh);
-        refresh();
+        card.querySelectorAll("input,textarea").forEach((el) => {
+          el.addEventListener("input", () => updateActionPreview(card));
+          el.addEventListener("change", () => updateActionPreview(card));
+        });
+        updateActionPreview(card);
       }
 
       async function updateActionPreview(card) {
         const prev = card.querySelector(".action-preview");
         try {
-          const proposalType = Number($("proposalType").value);
-          const a = readActionFromCard(card, proposalType);
+          const a = readActionFromCard(card);
+          const route = inferRoutingLabel(a.target, a.value);
           let hash = "(connect to compute hash)";
           if (dao) {
             hash = await dao.hashAction(a.target, a.value, a.data);
           }
-          prev.textContent = `target=${a.target}\nvalue=${a.value}\ndata=${a.data.slice(0, 66)}…\nhash=${hash}`;
+          prev.textContent = `route=${route}\ntarget=${a.target}\nvalue=${a.value}\ndata=${a.data.slice(0, 66)}…\nhash=${hash}`;
         } catch (e) {
           prev.textContent = `Preview: ${e.message || e}`;
         }
@@ -906,23 +678,20 @@
 
       function buildActionsInputs(count) {
         actionsContainer.innerHTML = "";
-        const proposalType = Number($("proposalType").value);
-        const opts =
-          proposalType === 2
-            ? grantorActionOptions()
-            : nativeActionOptions();
-
         for (let i = 0; i < count; i++) {
           const card = document.createElement("div");
           card.className = "action-card";
           card.dataset.index = String(i);
           card.innerHTML = `
             <div class="full"><strong>Action ${i + 1}</strong></div>
-            <label>What to do</label>
-            <select class="act-kind">
-              ${opts.map((o) => `<option value="${o.value}">${o.label}</option>`).join("")}
-            </select>
-            <div class="act-params"></div>
+            <label>Target address</label>
+            <input class="p-target" value="" placeholder="0x... (DAO, Genius contract, or external)" />
+            <label>Value (uint96)</label>
+            <input class="p-value" value="0" />
+            <label>Function signature</label>
+            <input class="p-fn" value="" placeholder="daoCallVault(bytes) | beginCreditIssuance(address,uint256) | ..." />
+            <label>Params (JSON array)</label>
+            <textarea class="p-params" placeholder='["0x..."]'></textarea>
             <div class="action-preview hint"></div>
           `;
           actionsContainer.appendChild(card);
@@ -935,12 +704,11 @@
         if (!Number.isInteger(count) || count < 0 || count > 8) {
           throw new Error("Action count must be 0–8");
         }
-        const proposalType = Number($("proposalType").value);
         const cards = actionsContainer.querySelectorAll(".action-card");
         if (cards.length !== count) throw new Error("UI out of sync; change action count again");
         const actions = [];
         cards.forEach((card) => {
-          actions.push(readActionFromCard(card, proposalType));
+          actions.push(readActionFromCard(card));
         });
         return actions;
       }
@@ -949,10 +717,12 @@
         currentDaoAddress = HARDCODED_ADDRESSES.geniusDao;
         currentConstitutionAddress = HARDCODED_ADDRESSES.constitution;
         updateNavAddresses();
+        $("grantorRootLabel").textContent = HARDCODED_ADDRESSES.grantorRoot;
         setStatus("Using hardcoded Sepolia addresses.", {
           chainIdRequired: REQUIRED_CHAIN_ID,
           geniusDao: currentDaoAddress,
           constitution: currentConstitutionAddress,
+          grantorRoot: HARDCODED_ADDRESSES.grantorRoot,
         });
       }
 
@@ -1055,18 +825,27 @@
         return parsed;
       }
 
+      function getInjectedProvider() {
+        const eth = window.ethereum;
+        if (!eth) return null;
+        const providers = Array.isArray(eth.providers) ? eth.providers : [eth];
+        const rabby = providers.find((p) => p && p.isRabby);
+        return rabby || providers[0] || null;
+      }
+
       async function ensureConnected() {
-        if (!window.ethereum) throw new Error("MetaMask not found");
+        if (!injectedProvider) throw new Error("No injected wallet found (Rabby/MetaMask).");
         if (!dao) throw new Error("Connect wallet first");
         const net = await provider.getNetwork();
         if (Number(net.chainId) !== REQUIRED_CHAIN_ID) {
-          throw new Error(`Wrong network. Switch MetaMask to Sepolia (${REQUIRED_CHAIN_ID}).`);
+          throw new Error(`Wrong network. Switch wallet to Sepolia (${REQUIRED_CHAIN_ID}).`);
         }
       }
 
       async function connect() {
-        if (!window.ethereum) throw new Error("MetaMask not found");
-        provider = new ethers.providers.Web3Provider(window.ethereum, "any");
+        injectedProvider = getInjectedProvider();
+        if (!injectedProvider) throw new Error("No injected wallet found (Rabby/MetaMask).");
+        provider = new ethers.providers.Web3Provider(injectedProvider, "any");
         await provider.send("eth_requestAccounts", []);
         signer = provider.getSigner();
         account = await signer.getAddress();
@@ -1152,7 +931,6 @@
           eta: $("proposalEta").value.trim() || "0",
           linkProtocol: $("proposalLinkProtocol").value.trim() || "0",
           url: $("proposalUrl").value.trim() || ZERO32,
-          proposalType: $("proposalType").value.trim(),
         };
         if (!ethers.utils.isHexString(input.url, 32)) {
           throw new Error("URL must be bytes32 hex");
@@ -1307,14 +1085,6 @@
         setStatus("Seat active check", { account, active });
       }
 
-      async function checkNativeTarget() {
-        await ensureConnected();
-        const target = $("nativeTargetCheck").value.trim();
-        requireAddress(target, "Native target check");
-        const allowed = await dao.isNativeTargetAllowed(target);
-        setStatus("Native target allowlist check", { target, allowed });
-      }
-
       async function scanProposals() {
         await ensureConnected();
         const start = Math.max(1, Number($("scanStartId").value || 1));
@@ -1326,34 +1096,127 @@
         for (let id = start; id <= end; id++) {
           const p = await dao.proposal(id);
           if (p.proposer === ethers.constants.AddressZero) continue;
-          const meta = parseProposalMeta(p.meta);
-          const line = `#${id} · ${proposalStatusLine(p, now)}`;
-
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = "scan-item";
-          btn.textContent = line;
-          if (String(selectedScanProposalId) === String(id)) btn.classList.add("selected");
-
-          btn.addEventListener("click", () => {
-            selectedScanProposalId = id;
-            $("voteProposalId").value = String(id);
-            $("executeProposalId").value = String(id);
-            $("readProposalId").value = String(id);
-            guidedExecutePayload = getPendingExecute(id);
-            $("executePreview").textContent = guidedExecutePayload
-              ? `Cached ${guidedExecutePayload.targets.length} action(s) for #${id}`
-              : `No cached actions for #${id} — use Advanced JSON if you have calldata.`;
-            box.querySelectorAll(".scan-item").forEach((b) => b.classList.remove("selected"));
-            btn.classList.add("selected");
-            setStatus("Selected proposal", { proposalId: id });
-          });
-
-          box.appendChild(btn);
+          renderProposalResult(box, id, p, now);
         }
         if (!box.children.length) {
           box.textContent = "No proposals found in that ID range (empty proposer).";
         }
+      }
+
+      function renderProposalResult(container, id, p, now) {
+        const line = `#${id} · ${proposalStatusLine(p, now)}`;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "scan-item";
+        btn.textContent = line;
+        if (String(selectedScanProposalId) === String(id)) btn.classList.add("selected");
+
+        btn.addEventListener("click", () => {
+          selectedScanProposalId = id;
+          $("voteProposalId").value = String(id);
+          $("executeProposalId").value = String(id);
+          $("readProposalId").value = String(id);
+          guidedExecutePayload = getPendingExecute(id);
+          $("executePreview").textContent = guidedExecutePayload
+            ? `Cached ${guidedExecutePayload.targets.length} action(s) for #${id}`
+            : `No cached actions for #${id} — use Advanced JSON if you have calldata.`;
+          container.querySelectorAll(".scan-item").forEach((b) => b.classList.remove("selected"));
+          btn.classList.add("selected");
+          setStatus("Selected proposal", { proposalId: id });
+        });
+
+        container.appendChild(btn);
+      }
+
+      async function fetchLogsChunked(address, topics, fromBlock, toBlock, step) {
+        const logs = [];
+        let start = fromBlock;
+        while (start <= toBlock) {
+          const end = Math.min(toBlock, start + step - 1);
+          const part = await provider.getLogs({
+            address,
+            topics,
+            fromBlock: start,
+            toBlock: end,
+          });
+          logs.push(...part);
+          start = end + 1;
+        }
+        return logs;
+      }
+
+      async function scanActiveProposalsByEvents() {
+        await ensureConnected();
+        const latest = await provider.getBlockNumber();
+        let fromBlock = Math.max(0, Number($("eventFromBlock").value || 0));
+        let toBlock = Number($("eventToBlock").value || 0);
+        if (toBlock === 0) toBlock = latest;
+        if (toBlock < fromBlock) throw new Error("Event toBlock must be >= fromBlock");
+        toBlock = Math.min(toBlock, latest);
+
+        const box = $("proposalScanResults");
+        box.innerHTML = "";
+        setStatus("Scanning events for active proposals...", { fromBlock, toBlock });
+
+        const createdTopic = dao.interface.getEventTopic("ProposalCreated");
+        const executedTopic = dao.interface.getEventTopic("ProposalExecuted");
+        const step = 20000;
+
+        const createdLogs = await fetchLogsChunked(
+          currentDaoAddress,
+          [createdTopic],
+          fromBlock,
+          toBlock,
+          step
+        );
+        const executedLogs = await fetchLogsChunked(
+          currentDaoAddress,
+          [executedTopic],
+          fromBlock,
+          toBlock,
+          step
+        );
+
+        const createdIds = new Set();
+        for (const log of createdLogs) {
+          try {
+            const parsed = dao.interface.parseLog(log);
+            createdIds.add(parsed.args.proposalId.toString());
+          } catch (_) {}
+        }
+
+        const executedIds = new Set();
+        for (const log of executedLogs) {
+          try {
+            const parsed = dao.interface.parseLog(log);
+            executedIds.add(parsed.args.proposalId.toString());
+          } catch (_) {}
+        }
+
+        const candidateIds = [...createdIds]
+          .filter((id) => !executedIds.has(id))
+          .sort((a, b) => Number(a) - Number(b));
+
+        const now = Math.floor(Date.now() / 1000);
+        for (const id of candidateIds) {
+          const p = await dao.proposal(id);
+          if (p.proposer === ethers.constants.AddressZero) continue;
+          const meta = parseProposalMeta(p.meta);
+          if (meta.executed) continue;
+          renderProposalResult(box, id, p, now);
+        }
+
+        if (!box.children.length) {
+          box.textContent = "No active proposals found by events in this block range.";
+        }
+
+        setStatus("Event scan finished", {
+          fromBlock,
+          toBlock,
+          createdEvents: createdLogs.length,
+          executedEvents: executedLogs.length,
+          activeShown: box.children.length,
+        });
       }
 
       async function run(fn) {
@@ -1376,8 +1239,8 @@
       $("loadCachedExecuteBtn").onclick = () => run(async () => loadCachedExecute());
       $("readProposalBtn").onclick = () => run(readProposal);
       $("checkSeatBtn").onclick = () => run(checkSeat);
-      $("checkNativeTargetBtn").onclick = () => run(checkNativeTarget);
       $("scanProposalsBtn").onclick = () => run(scanProposals);
+      $("scanActiveByEventsBtn").onclick = () => run(scanActiveProposalsByEvents);
       $("acceptGrantorshipBtn").onclick = () => run(acceptGrantorshipForConnectedWallet);
 
       $("addActionBtn").onclick = () => {
@@ -1399,12 +1262,9 @@
         buildActionsInputs(n);
       });
 
-      $("proposalType").addEventListener("change", () => {
-        buildActionsInputs(Number($("proposalActionCount").value || 0));
-      });
-
-      if (window.ethereum) {
-        window.ethereum.on?.("chainChanged", () => {
+      injectedProvider = getInjectedProvider();
+      if (injectedProvider) {
+        injectedProvider.on?.("chainChanged", () => {
           window.location.reload();
         });
       }

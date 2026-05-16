@@ -26,7 +26,6 @@ const { MerkleTree } = require("merkletreejs");
 const keccak256 = require("keccak256");
 
 const SEAT_COUNT = 16;
-const PROPOSAL_TYPE_GRANTOR = 2;
 const EXECUTE_THRESHOLD = 10;
 const GRANTOR_FUND_ETH = "5.0";
 const ALLOWANCES = [
@@ -198,7 +197,6 @@ async function main() {
     eta: 0,
     linkProtocol: 0,
     url: ethers.constants.HashZero,
-    proposalType: PROPOSAL_TYPE_GRANTOR,
   };
   if (activeFeeToken !== ethers.constants.AddressZero) {
     throw new Error("This script expects bootstrap fee in ETH (feeToken == 0x0).");

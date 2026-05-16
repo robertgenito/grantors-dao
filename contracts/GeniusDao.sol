@@ -40,9 +40,6 @@ error ENotEnoughVotes();
 error ENotExecutableYet();
 error ENotProposed();
 error ENotSelf();
-error EBadProposalType();
-error ENativeTargetNotAllowed();
-error EGrantorTargetOnlySelf();
 error ESeatNotActive();
 error EInsufficientProposalFee();
 error EUnexpectedNativeValue();
@@ -69,11 +66,8 @@ uint256 constant GRANTOR_PROPOSAL_LIFETIME = 29 days;
 uint256 constant GRANTOR_EXECUTION_GRACE = 5 days;
 uint256 constant GRANTOR_MAX_ACTIONS = 8;
 uint256 constant GRANTOR_EXECUTE_THRESHOLD = 10;
-uint256 constant PROPOSAL_TYPE_NATIVE = 1;
-uint256 constant PROPOSAL_TYPE_GRANTOR = 2;
 uint8 constant PM_ACTION_COUNT_MASK = 0x0f;
 uint8 constant PM_EXECUTED_MASK = 0x10;
-uint8 constant PM_PROPOSAL_TYPE_SHIFT = 5;
 // TODO: ^-- All of these can be in a LIB
 
 /*******************************************************************************
@@ -215,7 +209,7 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
 // ^-- this is already slot 1, with 16 bits remaining.
 
 // just pack these into a single uint8
-        // packed: [7..5]=proposalType, [4]=executed, [3..0]=actionCount
+        // packed: [4]=executed, [3..0]=actionCount
         uint8 meta;           // 1
 
         // Slot 2
@@ -254,7 +248,6 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
         uint40 eta;
         uint8 linkProtocol;
         bytes32 url;
-        uint256 proposalType;
     }
 
     // Global state packing
@@ -328,9 +321,6 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
     // Active proposal fee model (single currency at a time).
     address internal _proposalFeeToken;
     uint96 internal _proposalFeeAmount;
-
-    // target => 0(non-existent), 1(false), 2(true)
-    mapping(address => uint8) internal _nativeTargetAllowed;
 
     // seat => 0(non-existent), 1(false), 2(true)
     mapping(address => uint8) internal _seatActive;
@@ -418,24 +408,8 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
         h = _actionHash[proposalId][index];
     }
 
-    function isNativeTargetAllowed(address target) 
-        external 
-        view 
-        returns (bool allowed) 
-    {
-        allowed = (_nativeTargetAllowed[target] == 2);
-    }
-
     function isSeatActive(address seat) external view returns (bool active) {
         active = (_grantorDataAccepted[seat] == 2);
-    }
-
-    function proposalTypeNative() external pure returns (uint256 t) {
-        t = PROPOSAL_TYPE_NATIVE;
-    }
-
-    function proposalTypeGrantor() external pure returns (uint256 t) {
-        t = PROPOSAL_TYPE_GRANTOR;
     }
 
 
@@ -500,22 +474,17 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
         } while (i != len);
     }
 
-    function _packMeta(uint256 actionCount_, uint256 proposalType_, bool executed_)
+    function _packMeta(uint256 actionCount_, bool executed_)
         internal
         pure
         returns (uint8 m)
     {
         m = uint8(actionCount_ & PM_ACTION_COUNT_MASK);
-        m |= uint8(proposalType_ << PM_PROPOSAL_TYPE_SHIFT);
         if (executed_) m |= PM_EXECUTED_MASK;
     }
 
     function _actionCount(uint8 meta) internal pure returns (uint256 c) {
         c = uint256(meta & PM_ACTION_COUNT_MASK);
-    }
-
-    function _proposalType(uint8 meta) internal pure returns (uint256 t) {
-        t = uint256(meta >> PM_PROPOSAL_TYPE_SHIFT);
     }
 
     function _executed(uint8 meta) internal pure returns (bool e) {
@@ -532,42 +501,14 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
         uint256 actionIndex,
         address target,
         uint96 value,
-        bytes calldata data,
-        uint256 proposalType
+        bytes calldata data
     ) internal returns (bytes memory ret) {
         bytes32 expected = _actionHash[proposalId][actionIndex];
         if (expected != _hashAction(target, value, data)) revert EBadValue();
 
         bytes memory callRet;
-        if (proposalType == PROPOSAL_TYPE_NATIVE) {
-            if (_nativeTargetAllowed[target] != 2) revert ENativeTargetNotAllowed();
-            if (target == GENIUS_CONTRACT_VAULT) {
-                if (value != 0) revert EBadValue();
-                callRet = _constitution.callVault(data);
-            } 
-            else if (target == GENIUS_CONTRACT_TOKEN) {
-                if (value != 0) revert EBadValue();
-                callRet = _constitution.callGeniusToken(data);
-            } 
-            else if (target == GENIUS_CONTRACT_NFT_CONTROLLER) {
-                if (value != 0) revert EBadValue();
-                callRet = _constitution.callNftController(data);
-            } 
-            else if (target == GENIUS_CONTRACT_NFT_ROYALTIES) {
-                if (value != 0) revert EBadValue();
-                callRet = _constitution.callNftRoyalties(data);
-            } 
-            else {
-                callRet = _constitution.callAnyContract(target, value, data);
-            }
-        } 
-        else {
-// Anyone from the public should be allowed to execute anything that has reached
-// the approval threshold.
-
-// execute() is external and not seat-restricted.
-            // Grantor proposals execute only DAO-owned actions.
-            if (target != address(this)) revert EGrantorTargetOnlySelf();
+        if (target == address(this)) {
+            // DAO self-call: invokes onlySelf governance functions directly.
             (bool ok, bytes memory directRet) = target.call{value: uint256(value)}(data);
             if (!ok) {
                 assembly {
@@ -575,6 +516,21 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
                 }
             }
             callRet = directRet;
+        }
+        else if (value == 0 && target == GENIUS_CONTRACT_VAULT) {
+            callRet = _constitution.callVault(data);
+        }
+        else if (value == 0 && target == GENIUS_CONTRACT_TOKEN) {
+            callRet = _constitution.callGeniusToken(data);
+        }
+        else if (value == 0 && target == GENIUS_CONTRACT_NFT_CONTROLLER) {
+            callRet = _constitution.callNftController(data);
+        }
+        else if (value == 0 && target == GENIUS_CONTRACT_NFT_ROYALTIES) {
+            callRet = _constitution.callNftRoyalties(data);
+        }
+        else {
+            callRet = _constitution.callAnyContract(target, value, data);
         }
 
         emit ProposalActionExecuted(
@@ -606,9 +562,6 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
     ) external payable returns (uint256 proposalId) {
         uint256 len = actionHashes.length;
         if (len > GRANTOR_MAX_ACTIONS) revert EBadArrayLength();
-        if (input.proposalType != PROPOSAL_TYPE_NATIVE && input.proposalType != PROPOSAL_TYPE_GRANTOR) {
-            revert EBadProposalType();
-        }
         address payToken = _proposalFeeToken;
         uint96 feeRequired = _proposalFeeAmount;
         if (payToken == address(0)) {
@@ -645,7 +598,7 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
         p.proposer = msg.sender;
         p.createdOn = now40;
         p.eta = input.eta;
-        p.meta = _packMeta(len, input.proposalType, false);
+        p.meta = _packMeta(len, false);
         p.approvals = 0;
         p.linkProtocol = input.linkProtocol;
         p.url = input.url;
@@ -738,42 +691,26 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
         if (len != _actionCount(meta)) revert EBadArrayLength();
         if (len != values.length || len != datas.length) revert EBadArrayLength();
 
-        p.meta = _packMeta(_actionCount(meta), _proposalType(meta), true);
+        p.meta = _packMeta(_actionCount(meta), true);
 
         rets = new bytes[](len);
         uint256 i;
-        uint256 proposalType = _proposalType(meta);
-        if (proposalType == PROPOSAL_TYPE_NATIVE) {
-            if (_globals.nativeExecLock == 2) revert EReentrant();
-            _globals.nativeExecLock = 2;
-            while (i != len) {
-                rets[i] = _executeAction(
-                    proposalId,
-                    i,
-                    targets[i],
-                    values[i],
-                    datas[i],
-                    proposalType
-                );
+        // Any action may route to an external contract via Constitution; engage
+        // the re-entry guard for the entire execution loop.
+        if (_globals.nativeExecLock == 2) revert EReentrant();
+        _globals.nativeExecLock = 2;
+        while (i != len) {
+            rets[i] = _executeAction(
+                proposalId,
+                i,
+                targets[i],
+                values[i],
+                datas[i]
+            );
 
-                unchecked { ++i; }
-            }
-            _globals.nativeExecLock = 1;
-        } 
-        else {
-            while (i != len) {
-                rets[i] = _executeAction(
-                    proposalId,
-                    i,
-                    targets[i],
-                    values[i],
-                    datas[i],
-                    proposalType
-                );
-
-                unchecked { ++i; }
-            }
+            unchecked { ++i; }
         }
+        _globals.nativeExecLock = 1;
 
         emit ProposalExecuted(proposalId);
     }
@@ -789,14 +726,6 @@ contract GeniusDao is ReentrancyGuard, AllContracts {
         _proposalFeeToken = token;
         _proposalFeeAmount = amount;
         emit ProposalFeeConfigChanged(token, amount);
-    }
-
-    function daoSetNativeTargetAllowed(
-        address target, 
-        bool allowed
-    ) external onlySelf {
-        if (target == address(0)) revert ENullAddress();
-        _nativeTargetAllowed[target] = allowed ? 2 : 1;
     }
 
     function daoCallVault(bytes calldata data) external onlySelf returns (bytes memory ret) {

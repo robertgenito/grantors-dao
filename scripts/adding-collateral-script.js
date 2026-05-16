@@ -7,8 +7,6 @@ const keccak256 = require("keccak256");
 
 const SEAT_COUNT = 16;
 const EXECUTE_THRESHOLD = 10;
-const PROPOSAL_TYPE_NATIVE = 1;
-const PROPOSAL_TYPE_GRANTOR = 2;
 
 const ALLOWANCES = [
   "0",
@@ -327,7 +325,6 @@ async function main() {
     eta: 0,
     linkProtocol: 0,
     url: ethers.constants.HashZero,
-    proposalType: PROPOSAL_TYPE_GRANTOR,
   };
   const p1 = await parseProposalId(
     await geniusDao.propose([ownershipActionHash], proposalInput, { value: feeAmount }),
